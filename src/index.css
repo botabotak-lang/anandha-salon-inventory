@@ -1,0 +1,143 @@
+:root {
+  font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 18px;
+  line-height: 1.45;
+  color: #1a1a1a;
+  background: #f6f6f4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+a {
+  color: #0b5cab;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  min-height: 44px;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  border: 1px solid #ccc;
+  background: #fff;
+  cursor: pointer;
+}
+
+button.primary {
+  background: #1a6b3d;
+  color: #fff;
+  border-color: #145a33;
+}
+
+button.danger {
+  background: #b00020;
+  color: #fff;
+  border-color: #900018;
+}
+
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid #e8e8e4;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  max-width: 100%;
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid #ccc;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  border-bottom: 1px solid #eee;
+  padding: 0.45rem 0.35rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.nav a {
+  padding: 0.45rem 0.65rem;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #ddd;
+  text-decoration: none;
+  color: #1a1a1a;
+  font-size: 0.95rem;
+}
+
+.nav a.active {
+  background: #e8f4ec;
+  border-color: #1a6b3d;
+}
+
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0.75rem;
+}
+
+.alert {
+  background: #fff3cd;
+  border: 1px solid #e6d89c;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  margin-bottom: 0.75rem;
+}
+
+.error {
+  background: #fde7ea;
+  border-color: #f5b5bf;
+  color: #6a0f1f;
+}

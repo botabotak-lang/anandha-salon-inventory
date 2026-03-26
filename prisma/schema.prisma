@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Shop {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  users     User[]
+  products  Product[]
+  services  Service[]
+  sales     Sale[]
+  movements StockMovement[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  shopId       String
+  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  salesCreated Sale[]   @relation("SaleCreatedBy")
+  movements    StockMovement[]
+}
+
+enum ServiceCategory {
+  MIMILO
+  ESTE
+  OTHER
+}
+
+enum SaleLineType {
+  SERVICE
+  PRODUCT
+}
+
+enum StockMovementType {
+  IN
+  OUT_SALE
+  OUT_MANUAL
+  ADJUST
+}
+
+model Product {
+  id              String   @id @default(cuid())
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name            String
+  category        String?
+  defaultTaxRate  Int
+  listPriceTaxIn  Int
+  standardCost    Int
+  minStock        Int      @default(0)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  saleLines       SaleLine[]
+  movements       StockMovement[]
+}
+
+model Service {
+  id             String          @id @default(cuid())
+  shopId         String
+  shop           Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name           String
+  category       ServiceCategory
+  taxRate        Int
+  unitPriceTaxIn Int
+  standardCost   Int             @default(0)
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  saleLines      SaleLine[]
+}
+
+model Sale {
+  id              String    @id @default(cuid())
+  shopId          String
+  shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  occurredAt      DateTime
+  customerName    String?
+  paymentMethod   String?
+  memo            String?
+  voidedAt        DateTime?
+  createdByUserId String
+  createdBy       User      @relation("SaleCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime  @default(now())
+  lines           SaleLine[]
+}
+
+model SaleLine {
+  id                 String       @id @default(cuid())
+  saleId             String
+  sale               Sale         @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  lineOrder          Int
+  lineType           SaleLineType
+  serviceId          String?
+  service            Service?     @relation(fields: [serviceId], references: [id])
+  productId          String?
+  product            Product?     @relation(fields: [productId], references: [id])
+  qty                Int
+  unitPriceTaxIn     Int
+  taxRate            Int
+  taxExcludedAmount  Int
+  taxAmount          Int
+  taxIncludedAmount  Int
+  movements          StockMovement[]
+}
+
+model StockMovement {
+  id                 String            @id @default(cuid())
+  shopId             String
+  shop               Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  type               StockMovementType
+  productId          String
+  product            Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  qty                Int
+  unitCostSnapshot   Int?
+  reason             String?
+  occurredAt         DateTime
+  refSaleLineId      String?
+  refSaleLine        SaleLine?         @relation(fields: [refSaleLineId], references: [id])
+  createdByUserId    String
+  createdBy          User              @relation(fields: [createdByUserId], references: [id])
+  createdAt          DateTime          @default(now())
+}
