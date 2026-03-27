@@ -150,6 +150,20 @@ const serviceIn = z.object({
   active: z.boolean().optional(),
 });
 
+const courseTemplateItemIn = z.object({
+  productId: z.string(),
+  qty: z.number().int().positive(),
+  unitPriceTaxIn: z.number().int().min(0),
+  taxRate: z.number().int().min(0).max(100),
+});
+
+const courseTemplateIn = z.object({
+  name: z.string().min(1),
+  months: z.number().int().min(1).max(12),
+  active: z.boolean().optional(),
+  items: z.array(courseTemplateItemIn).min(1),
+});
+
 api.post("/services", async (c) => {
   const shopId = c.get("session").shopId;
   const parsed = serviceIn.safeParse(await c.req.json());
@@ -177,6 +191,87 @@ api.patch("/services/:id", async (c) => {
   if (!existing) return c.json({ error: "見つかりません" }, 404);
   const s = await prisma.service.update({ where: { id }, data: parsed.data });
   return c.json({ service: s });
+});
+
+api.get("/course-templates", async (c) => {
+  const shopId = c.get("session").shopId;
+  const list = await prisma.courseTemplate.findMany({
+    where: { shopId },
+    orderBy: [{ months: "asc" }, { name: "asc" }],
+    include: {
+      items: {
+        orderBy: { lineOrder: "asc" },
+        include: { product: true },
+      },
+    },
+  });
+  return c.json({ templates: list });
+});
+
+api.post("/course-templates", async (c) => {
+  const shopId = c.get("session").shopId;
+  const parsed = courseTemplateIn.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "入力が不正です", details: parsed.error.flatten() }, 400);
+  const productIds = [...new Set(parsed.data.items.map((x) => x.productId))];
+  const exists = await prisma.product.findMany({
+    where: { shopId, id: { in: productIds } },
+    select: { id: true },
+  });
+  if (exists.length !== productIds.length) return c.json({ error: "存在しない商品が含まれています" }, 400);
+  const created = await prisma.courseTemplate.create({
+    data: {
+      shopId,
+      name: parsed.data.name,
+      months: parsed.data.months,
+      active: parsed.data.active ?? true,
+      items: {
+        create: parsed.data.items.map((it, idx) => ({
+          ...it,
+          lineOrder: idx,
+        })),
+      },
+    },
+    include: { items: { orderBy: { lineOrder: "asc" }, include: { product: true } } },
+  });
+  return c.json({ template: created });
+});
+
+api.patch("/course-templates/:id", async (c) => {
+  const shopId = c.get("session").shopId;
+  const id = c.req.param("id");
+  const parsed = courseTemplateIn.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "入力が不正です", details: parsed.error.flatten() }, 400);
+  const existingTemplate = await prisma.courseTemplate.findFirst({ where: { id, shopId } });
+  if (!existingTemplate) return c.json({ error: "見つかりません" }, 404);
+  const productIds = [...new Set(parsed.data.items.map((x) => x.productId))];
+  const exists = await prisma.product.findMany({
+    where: { shopId, id: { in: productIds } },
+    select: { id: true },
+  });
+  if (exists.length !== productIds.length) return c.json({ error: "存在しない商品が含まれています" }, 400);
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.courseTemplateItem.deleteMany({ where: { courseTemplateId: id } });
+    await tx.courseTemplate.update({
+      where: { id },
+      data: {
+        name: parsed.data.name,
+        months: parsed.data.months,
+        active: parsed.data.active ?? true,
+        items: {
+          create: parsed.data.items.map((it, idx) => ({
+            ...it,
+            lineOrder: idx,
+          })),
+        },
+      },
+    });
+    return tx.courseTemplate.findUniqueOrThrow({
+      where: { id },
+      include: { items: { orderBy: { lineOrder: "asc" }, include: { product: true } } },
+    });
+  });
+  return c.json({ template: updated });
 });
 
 api.get("/stock/summary", async (c) => {
@@ -306,6 +401,7 @@ const saleLineIn = z.discriminatedUnion("lineType", [
     qty: z.number().int().positive(),
     unitPriceTaxIn: z.number().int().min(0),
     taxRate: z.number().int().min(0).max(100),
+    deductStockNow: z.boolean().optional(),
   }),
 ]);
 
@@ -359,7 +455,7 @@ api.post("/sales", async (c) => {
           },
         });
 
-        if (line.lineType === "PRODUCT") {
+        if (line.lineType === "PRODUCT" && line.deductStockNow !== false) {
           const prod = await tx.product.findFirst({ where: { id: line.productId, shopId } });
           if (!prod) throw new Error("PRODUCT_NOT_FOUND");
           const bal = await stockQtyForProduct(tx, prod.id);
@@ -583,6 +679,14 @@ api.get("/reports/monthly", async (c) => {
 });
 
 api.get("/export/csv", async (c) => {
+  // 互換のため旧URLは売上CSVへリダイレクト
+  const from = c.req.query("from");
+  const to = c.req.query("to");
+  if (!from || !to) return c.json({ error: "from と to（ISO日時）を指定してください" }, 400);
+  return c.redirect(`/api/export/csv/sales?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, 302);
+});
+
+api.get("/export/csv/sales", async (c) => {
   const shopId = c.get("session").shopId;
   const from = c.req.query("from");
   const to = c.req.query("to");
@@ -616,6 +720,8 @@ api.get("/export/csv", async (c) => {
     "税抜合計",
     "税額合計",
     "税込合計",
+    "仕入原価合計",
+    "粗利（入金基準）",
     "支払方法",
     "メモ",
   ];
@@ -633,6 +739,8 @@ api.get("/export/csv", async (c) => {
         l.lineType === "SERVICE" && l.service
           ? l.service.name
           : l.product?.name ?? "";
+      const cost = l.lineType === "PRODUCT" && l.product ? l.product.standardCost * l.qty : 0;
+      const gross = l.taxIncludedAmount - cost;
       lines.push(
         [
           esc(s.occurredAt.toISOString()),
@@ -648,6 +756,8 @@ api.get("/export/csv", async (c) => {
           esc(l.taxExcludedAmount),
           esc(l.taxAmount),
           esc(l.taxIncludedAmount),
+          esc(cost),
+          esc(gross),
           esc(s.paymentMethod),
           esc(s.memo),
         ].join(",")
@@ -661,6 +771,96 @@ api.get("/export/csv", async (c) => {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": `attachment; filename="sales-lines-${from.slice(0, 10)}_${to.slice(0, 10)}.csv"`,
+    },
+  });
+});
+
+api.get("/export/csv/inventory", async (c) => {
+  const shopId = c.get("session").shopId;
+  const from = c.req.query("from");
+  const to = c.req.query("to");
+  if (!from || !to) return c.json({ error: "from と to（ISO日時）を指定してください" }, 400);
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+
+  const esc = (v: string | number | null | undefined) => {
+    const s = v == null ? "" : String(v);
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+
+  const products = await prisma.product.findMany({
+    where: { shopId, active: true },
+    orderBy: { name: "asc" },
+  });
+  const lines: string[] = [];
+
+  lines.push("【在庫評価】");
+  lines.push(["商品名", "現在庫数", "仕入単価", "在庫金額"].join(","));
+  for (const p of products) {
+    const qty = await stockQtyForProduct(prisma, p.id);
+    const amount = qty * p.standardCost;
+    lines.push([esc(p.name), esc(qty), esc(p.standardCost), esc(amount)].join(","));
+  }
+
+  lines.push("");
+  lines.push("【期間内 入出庫履歴】");
+  lines.push(["日時", "種別", "商品名", "数量", "仕入単価", "原価金額", "理由", "登録者"].join(","));
+  const movements = await prisma.stockMovement.findMany({
+    where: { shopId, occurredAt: { gte: fromDate, lte: toDate } },
+    orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }],
+    include: { product: true, createdBy: { select: { name: true } } },
+  });
+  for (const m of movements) {
+    const signedQty = m.type === StockMovementType.IN ? m.qty : -m.qty;
+    const unitCost = m.unitCostSnapshot ?? m.product.standardCost;
+    const amount = unitCost * signedQty;
+    lines.push(
+      [
+        esc(m.occurredAt.toISOString()),
+        esc(m.type),
+        esc(m.product.name),
+        esc(signedQty),
+        esc(unitCost),
+        esc(amount),
+        esc(m.reason),
+        esc(m.createdBy.name),
+      ].join(",")
+    );
+  }
+
+  lines.push("");
+  lines.push("【期間内 出庫ベース粗利（商品ごと合計）】");
+  lines.push(["商品名", "出庫数量", "出庫売上見込（税込）", "出庫原価", "粗利"].join(","));
+  const outbounds = await prisma.stockMovement.findMany({
+    where: {
+      shopId,
+      occurredAt: { gte: fromDate, lte: toDate },
+      type: { in: [StockMovementType.OUT_SALE, StockMovementType.OUT_MANUAL] },
+    },
+    include: { product: true },
+  });
+  const summary = new Map<string, { name: string; qty: number; revenue: number; cost: number }>();
+  for (const m of outbounds) {
+    const key = m.productId;
+    const row = summary.get(key) ?? { name: m.product.name, qty: 0, revenue: 0, cost: 0 };
+    const unitCost = m.unitCostSnapshot ?? m.product.standardCost;
+    row.qty += m.qty;
+    row.revenue += m.product.listPriceTaxIn * m.qty;
+    row.cost += unitCost * m.qty;
+    summary.set(key, row);
+  }
+  const sorted = [...summary.values()].sort((a, b) => a.name.localeCompare(b.name, "ja"));
+  for (const row of sorted) {
+    lines.push([esc(row.name), esc(row.qty), esc(row.revenue), esc(row.cost), esc(row.revenue - row.cost)].join(","));
+  }
+
+  const bom = "\uFEFF";
+  const body = bom + lines.join("\n");
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="inventory-${from.slice(0, 10)}_${to.slice(0, 10)}.csv"`,
     },
   });
 });

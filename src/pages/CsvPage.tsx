@@ -14,7 +14,9 @@ export function CsvPage() {
   });
   const [to, setTo] = useState(isoLocal(new Date()));
 
-  const href = `/api/export/csv?from=${encodeURIComponent(new Date(from).toISOString())}&to=${encodeURIComponent(new Date(to).toISOString())}`;
+  const q = `from=${encodeURIComponent(new Date(from).toISOString())}&to=${encodeURIComponent(new Date(to).toISOString())}`;
+  const salesHref = `/api/export/csv/sales?${q}`;
+  const inventoryHref = `/api/export/csv/inventory?${q}`;
 
   return (
     <div>
@@ -31,10 +33,11 @@ export function CsvPage() {
           <label>終了</label>
           <input type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)} />
         </div>
-        <a className="row" href={href} style={{ display: "inline-flex", textDecoration: "none" }}>
-          <button type="button" className="primary">
-            CSVを取得
-          </button>
+        <a className="row" href={salesHref} style={{ display: "inline-flex", textDecoration: "none" }}>
+          <button type="button" className="primary">売上CSV（明細・粗利）を取得</button>
+        </a>
+        <a className="row" href={inventoryHref} style={{ display: "inline-flex", textDecoration: "none" }}>
+          <button type="button">在庫CSV（在庫評価・入出庫履歴・出庫ベース粗利）を取得</button>
         </a>
       </div>
     </div>

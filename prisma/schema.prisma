@@ -16,6 +16,7 @@ model Shop {
   services  Service[]
   sales     Sale[]
   movements StockMovement[]
+  courseTemplates CourseTemplate[]
 }
 
 model User {
@@ -63,6 +64,7 @@ model Product {
   updatedAt       DateTime @updatedAt
   saleLines       SaleLine[]
   movements       StockMovement[]
+  courseItems     CourseTemplateItem[]
 }
 
 model Service {
@@ -130,4 +132,28 @@ model StockMovement {
   createdByUserId    String
   createdBy          User              @relation(fields: [createdByUserId], references: [id])
   createdAt          DateTime          @default(now())
+}
+
+model CourseTemplate {
+  id        String               @id @default(cuid())
+  shopId    String
+  shop      Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name      String
+  months    Int
+  active    Boolean              @default(true)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  items     CourseTemplateItem[]
+}
+
+model CourseTemplateItem {
+  id               String         @id @default(cuid())
+  courseTemplateId String
+  courseTemplate   CourseTemplate @relation(fields: [courseTemplateId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  lineOrder        Int
+  qty              Int
+  unitPriceTaxIn   Int
+  taxRate          Int
 }

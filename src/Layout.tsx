@@ -35,6 +35,9 @@ export function Layout({ children }: { children: ReactNode }) {
         <NavLink to="/services" className={({ isActive }) => (isActive ? "active" : "")}>
           施術マスタ
         </NavLink>
+        <NavLink to="/courses" className={({ isActive }) => (isActive ? "active" : "")}>
+          コースマスタ
+        </NavLink>
         <NavLink to="/monthly" className={({ isActive }) => (isActive ? "active" : "")}>
           月次
         </NavLink>

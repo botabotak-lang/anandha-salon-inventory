@@ -49,7 +49,7 @@ export function ProductsPage() {
             </button>
           </div>
           <div style={{ fontSize: "0.95rem", color: "#444" }}>
-            税込売価 {p.listPriceTaxIn.toLocaleString()}円 / 税率 {p.defaultTaxRate}% / 原価 {p.standardCost.toLocaleString()}円 / 最小在庫{" "}
+            税込売価 {p.listPriceTaxIn.toLocaleString()}円 / 税率 {p.defaultTaxRate}% / 仕入単価 {p.standardCost.toLocaleString()}円 / 最小在庫{" "}
             {p.minStock}
             {!p.active && "（無効）"}
           </div>
@@ -145,7 +145,7 @@ function ProductForm({
       </div>
       <div className="row">
         <div style={{ flex: "1 1 140px" }}>
-          <label>標準原価（円）</label>
+          <label>仕入単価（円）</label>
           <input
             type="number"
             inputMode="numeric"

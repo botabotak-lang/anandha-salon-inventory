@@ -136,7 +136,64 @@ async function main() {
     }
   }
 
-  console.log("Seed OK: shop + 2 users + products + services");
+  const existingTemplates = await prisma.courseTemplate.count({ where: { shopId: shop.id } });
+  if (existingTemplates === 0) {
+    const activeProducts = await prisma.product.findMany({
+      where: { shopId: shop.id, active: true },
+      orderBy: { name: "asc" },
+      take: 3,
+    });
+    if (activeProducts.length >= 2) {
+      const p1 = activeProducts[0];
+      const p2 = activeProducts[1];
+      const p3 = activeProducts[2] ?? activeProducts[1];
+      const templates = [
+        {
+          name: "耳つぼ 1ヶ月コース",
+          months: 1,
+          items: [
+            { productId: p1.id, qty: 1, unitPriceTaxIn: p1.listPriceTaxIn, taxRate: p1.defaultTaxRate },
+            { productId: p2.id, qty: 1, unitPriceTaxIn: p2.listPriceTaxIn, taxRate: p2.defaultTaxRate },
+          ],
+        },
+        {
+          name: "耳つぼ 2ヶ月コース",
+          months: 2,
+          items: [
+            { productId: p1.id, qty: 2, unitPriceTaxIn: p1.listPriceTaxIn, taxRate: p1.defaultTaxRate },
+            { productId: p2.id, qty: 2, unitPriceTaxIn: p2.listPriceTaxIn, taxRate: p2.defaultTaxRate },
+          ],
+        },
+        {
+          name: "耳つぼ 3ヶ月コース",
+          months: 3,
+          items: [
+            { productId: p1.id, qty: 3, unitPriceTaxIn: p1.listPriceTaxIn, taxRate: p1.defaultTaxRate },
+            { productId: p2.id, qty: 3, unitPriceTaxIn: p2.listPriceTaxIn, taxRate: p2.defaultTaxRate },
+            { productId: p3.id, qty: 3, unitPriceTaxIn: p3.listPriceTaxIn, taxRate: p3.defaultTaxRate },
+          ],
+        },
+      ];
+      for (const t of templates) {
+        await prisma.courseTemplate.create({
+          data: {
+            shopId: shop.id,
+            name: t.name,
+            months: t.months,
+            active: true,
+            items: {
+              create: t.items.map((it, idx) => ({
+                ...it,
+                lineOrder: idx,
+              })),
+            },
+          },
+        });
+      }
+    }
+  }
+
+  console.log("Seed OK: shop + users + products + services + course templates");
 }
 
 main()

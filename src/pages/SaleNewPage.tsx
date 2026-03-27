@@ -4,10 +4,29 @@ import { api } from "../api";
 
 type Svc = { id: string; name: string; unitPriceTaxIn: number; taxRate: number };
 type Prd = { id: string; name: string; listPriceTaxIn: number; defaultTaxRate: number };
+type CourseTemplate = {
+  id: string;
+  name: string;
+  months: number;
+  active: boolean;
+  items: Array<{
+    productId: string;
+    qty: number;
+    unitPriceTaxIn: number;
+    taxRate: number;
+  }>;
+};
 
 type Line =
   | { lineType: "SERVICE"; serviceId: string; qty: number; unitPriceTaxIn: number; taxRate: number }
-  | { lineType: "PRODUCT"; productId: string; qty: number; unitPriceTaxIn: number; taxRate: number };
+  | {
+      lineType: "PRODUCT";
+      productId: string;
+      qty: number;
+      unitPriceTaxIn: number;
+      taxRate: number;
+      deductStockNow: boolean;
+    };
 
 function isoLocal(d: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -18,6 +37,8 @@ export function SaleNewPage() {
   const nav = useNavigate();
   const [services, setServices] = useState<Svc[]>([]);
   const [products, setProducts] = useState<Prd[]>([]);
+  const [courseTemplates, setCourseTemplates] = useState<CourseTemplate[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [memo, setMemo] = useState("");
@@ -27,12 +48,14 @@ export function SaleNewPage() {
 
   useEffect(() => {
     (async () => {
-      const [sv, pr] = await Promise.all([
+      const [sv, pr, ct] = await Promise.all([
         api<{ services: Svc[] }>("/api/services"),
         api<{ products: Prd[] }>("/api/products"),
+        api<{ templates: CourseTemplate[] }>("/api/course-templates"),
       ]);
       setServices(sv.services.filter((s) => (s as { active?: boolean }).active !== false));
       setProducts(pr.products.filter((p) => (p as { active?: boolean }).active !== false));
+      setCourseTemplates(ct.templates.filter((t) => t.active));
     })().catch(() => setErr("マスタの取得に失敗しました"));
   }, []);
 
@@ -56,8 +79,24 @@ export function SaleNewPage() {
         qty: 1,
         unitPriceTaxIn: p.listPriceTaxIn,
         taxRate: p.defaultTaxRate,
+        deductStockNow: true,
       },
     ]);
+  }
+
+  function applyCourseTemplate() {
+    const selected = courseTemplates.find((x) => x.id === selectedCourseId);
+    if (!selected) return;
+    const mapped: Line[] = selected.items.map((it) => ({
+      lineType: "PRODUCT",
+      productId: it.productId,
+      qty: it.qty,
+      unitPriceTaxIn: it.unitPriceTaxIn,
+      taxRate: it.taxRate,
+      // 契約時は入金だけ計上し、お渡し時に在庫を減らす前提
+      deductStockNow: false,
+    }));
+    setLines((ls) => [...ls, ...mapped]);
   }
 
   return (
@@ -105,6 +144,25 @@ export function SaleNewPage() {
         <div>
           <label>メモ（延長など）</label>
           <textarea rows={2} value={memo} onChange={(e) => setMemo(e.target.value)} />
+        </div>
+        <div className="card stack" style={{ background: "#fafafa" }}>
+          <strong>コース明細を自動入力</strong>
+          <div className="row">
+            <select value={selectedCourseId} onChange={(e) => setSelectedCourseId(e.target.value)} style={{ flex: 1 }}>
+              <option value="">コースを選択</option>
+              {courseTemplates.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}（{c.months}ヶ月）
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={applyCourseTemplate} disabled={!selectedCourseId}>
+              コース明細を追加
+            </button>
+          </div>
+          <p style={{ margin: 0, color: "#444", fontSize: "0.95rem" }}>
+            追加後に品目・数量・単価は個別に変更できます。
+          </p>
         </div>
         <div className="row">
           <button type="button" onClick={addService}>
@@ -179,6 +237,20 @@ export function SaleNewPage() {
                     </option>
                   ))}
                 </select>
+                <label className="row" style={{ gap: "0.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={ln.deductStockNow}
+                    onChange={(e) =>
+                      setLines((ls) =>
+                        ls.map((x, j) =>
+                          j === i && x.lineType === "PRODUCT" ? { ...x, deductStockNow: e.target.checked } : x
+                        )
+                      )
+                    }
+                  />
+                  今回お渡し分として在庫を減らす
+                </label>
               </>
             )}
             <div className="row">
