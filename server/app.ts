@@ -8,7 +8,7 @@ import { SaleLineType, StockMovementType } from "@prisma/client";
 import { prisma } from "./prisma.js";
 import { clearSessionCookie, getSession, setSessionCookie, signSession } from "./lib/auth.js";
 import { stockQtyForProduct } from "./lib/stock.js";
-import { taxPartsFromIncluded } from "../shared/tax.js";
+import { taxIncludedFromExcluded, taxPartsFromIncluded } from "../shared/tax.js";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -108,7 +108,8 @@ const productIn = z.object({
   name: z.string().min(1),
   category: z.string().optional().nullable(),
   defaultTaxRate: z.number().int().min(0).max(100),
-  listPriceTaxIn: z.number().int().min(0),
+  listPriceTaxIn: z.number().int().min(0).optional(),
+  listPriceTaxEx: z.number().int().min(0).optional(),
   standardCost: z.number().int().min(0),
   minStock: z.number().int().min(0),
   active: z.boolean().optional(),
@@ -118,8 +119,21 @@ api.post("/products", async (c) => {
   const shopId = c.get("session").shopId;
   const parsed = productIn.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "入力が不正です", details: parsed.error.flatten() }, 400);
+  const listPriceTaxIn =
+    parsed.data.listPriceTaxEx != null
+      ? taxIncludedFromExcluded(parsed.data.listPriceTaxEx, parsed.data.defaultTaxRate)
+      : (parsed.data.listPriceTaxIn ?? 0);
   const p = await prisma.product.create({
-    data: { shopId, ...parsed.data, active: parsed.data.active ?? true },
+    data: {
+      shopId,
+      name: parsed.data.name,
+      category: parsed.data.category,
+      defaultTaxRate: parsed.data.defaultTaxRate,
+      listPriceTaxIn,
+      standardCost: parsed.data.standardCost,
+      minStock: parsed.data.minStock,
+      active: parsed.data.active ?? true,
+    },
   });
   return c.json({ product: p });
 });
@@ -131,7 +145,23 @@ api.patch("/products/:id", async (c) => {
   if (!parsed.success) return c.json({ error: "入力が不正です" }, 400);
   const existing = await prisma.product.findFirst({ where: { id, shopId } });
   if (!existing) return c.json({ error: "見つかりません" }, 404);
-  const p = await prisma.product.update({ where: { id }, data: parsed.data });
+  const defaultTaxRate = parsed.data.defaultTaxRate ?? existing.defaultTaxRate;
+  const nextListPriceTaxIn =
+    parsed.data.listPriceTaxEx != null
+      ? taxIncludedFromExcluded(parsed.data.listPriceTaxEx, defaultTaxRate)
+      : parsed.data.listPriceTaxIn;
+  const p = await prisma.product.update({
+    where: { id },
+    data: {
+      ...(parsed.data.name != null ? { name: parsed.data.name } : {}),
+      ...(parsed.data.category !== undefined ? { category: parsed.data.category } : {}),
+      ...(parsed.data.defaultTaxRate != null ? { defaultTaxRate: parsed.data.defaultTaxRate } : {}),
+      ...(nextListPriceTaxIn != null ? { listPriceTaxIn: nextListPriceTaxIn } : {}),
+      ...(parsed.data.standardCost != null ? { standardCost: parsed.data.standardCost } : {}),
+      ...(parsed.data.minStock != null ? { minStock: parsed.data.minStock } : {}),
+      ...(parsed.data.active != null ? { active: parsed.data.active } : {}),
+    },
+  });
   return c.json({ product: p });
 });
 
@@ -145,7 +175,8 @@ const serviceIn = z.object({
   name: z.string().min(1),
   category: z.enum(["MIMILO", "ESTE", "OTHER"]),
   taxRate: z.number().int().min(0).max(100),
-  unitPriceTaxIn: z.number().int().min(0),
+  unitPriceTaxIn: z.number().int().min(0).optional(),
+  unitPriceTaxEx: z.number().int().min(0).optional(),
   standardCost: z.number().int().min(0).optional(),
   active: z.boolean().optional(),
 });
@@ -153,7 +184,8 @@ const serviceIn = z.object({
 const courseTemplateItemIn = z.object({
   productId: z.string(),
   qty: z.number().int().positive(),
-  unitPriceTaxIn: z.number().int().min(0),
+  unitPriceTaxIn: z.number().int().min(0).optional(),
+  unitPriceTaxEx: z.number().int().min(0).optional(),
   taxRate: z.number().int().min(0).max(100),
 });
 
@@ -168,13 +200,17 @@ api.post("/services", async (c) => {
   const shopId = c.get("session").shopId;
   const parsed = serviceIn.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "入力が不正です" }, 400);
+  const unitPriceTaxIn =
+    parsed.data.unitPriceTaxEx != null
+      ? taxIncludedFromExcluded(parsed.data.unitPriceTaxEx, parsed.data.taxRate)
+      : (parsed.data.unitPriceTaxIn ?? 0);
   const s = await prisma.service.create({
     data: {
       shopId,
       name: parsed.data.name,
       category: parsed.data.category,
       taxRate: parsed.data.taxRate,
-      unitPriceTaxIn: parsed.data.unitPriceTaxIn,
+      unitPriceTaxIn,
       standardCost: parsed.data.standardCost ?? 0,
       active: parsed.data.active ?? true,
     },
@@ -189,7 +225,22 @@ api.patch("/services/:id", async (c) => {
   if (!parsed.success) return c.json({ error: "入力が不正です" }, 400);
   const existing = await prisma.service.findFirst({ where: { id, shopId } });
   if (!existing) return c.json({ error: "見つかりません" }, 404);
-  const s = await prisma.service.update({ where: { id }, data: parsed.data });
+  const taxRate = parsed.data.taxRate ?? existing.taxRate;
+  const unitPriceTaxIn =
+    parsed.data.unitPriceTaxEx != null
+      ? taxIncludedFromExcluded(parsed.data.unitPriceTaxEx, taxRate)
+      : parsed.data.unitPriceTaxIn;
+  const s = await prisma.service.update({
+    where: { id },
+    data: {
+      ...(parsed.data.name != null ? { name: parsed.data.name } : {}),
+      ...(parsed.data.category != null ? { category: parsed.data.category } : {}),
+      ...(parsed.data.taxRate != null ? { taxRate: parsed.data.taxRate } : {}),
+      ...(unitPriceTaxIn != null ? { unitPriceTaxIn } : {}),
+      ...(parsed.data.standardCost != null ? { standardCost: parsed.data.standardCost } : {}),
+      ...(parsed.data.active != null ? { active: parsed.data.active } : {}),
+    },
+  });
   return c.json({ service: s });
 });
 
@@ -226,7 +277,13 @@ api.post("/course-templates", async (c) => {
       active: parsed.data.active ?? true,
       items: {
         create: parsed.data.items.map((it, idx) => ({
-          ...it,
+          productId: it.productId,
+          qty: it.qty,
+          unitPriceTaxIn:
+            it.unitPriceTaxEx != null
+              ? taxIncludedFromExcluded(it.unitPriceTaxEx, it.taxRate)
+              : (it.unitPriceTaxIn ?? 0),
+          taxRate: it.taxRate,
           lineOrder: idx,
         })),
       },
@@ -260,7 +317,13 @@ api.patch("/course-templates/:id", async (c) => {
         active: parsed.data.active ?? true,
         items: {
           create: parsed.data.items.map((it, idx) => ({
-            ...it,
+            productId: it.productId,
+            qty: it.qty,
+            unitPriceTaxIn:
+              it.unitPriceTaxEx != null
+                ? taxIncludedFromExcluded(it.unitPriceTaxEx, it.taxRate)
+                : (it.unitPriceTaxIn ?? 0),
+            taxRate: it.taxRate,
             lineOrder: idx,
           })),
         },
@@ -393,6 +456,7 @@ const saleLineIn = z.discriminatedUnion("lineType", [
     serviceId: z.string(),
     qty: z.number().int().positive(),
     unitPriceTaxIn: z.number().int().min(0),
+    unitPriceTaxEx: z.number().int().min(0).optional(),
     taxRate: z.number().int().min(0).max(100),
   }),
   z.object({
@@ -400,6 +464,7 @@ const saleLineIn = z.discriminatedUnion("lineType", [
     productId: z.string(),
     qty: z.number().int().positive(),
     unitPriceTaxIn: z.number().int().min(0),
+    unitPriceTaxEx: z.number().int().min(0).optional(),
     taxRate: z.number().int().min(0).max(100),
     deductStockNow: z.boolean().optional(),
   }),
@@ -434,7 +499,11 @@ api.post("/sales", async (c) => {
 
       let order = 0;
       for (const line of parsed.data.lines) {
-        const parts = taxPartsFromIncluded(line.unitPriceTaxIn, line.taxRate);
+        const unitPriceTaxIn =
+          line.unitPriceTaxEx != null
+            ? taxIncludedFromExcluded(line.unitPriceTaxEx, line.taxRate)
+            : line.unitPriceTaxIn;
+        const parts = taxPartsFromIncluded(unitPriceTaxIn, line.taxRate);
         const lineTotalExcluded = parts.taxExcluded * line.qty;
         const lineTotalTax = parts.taxAmount * line.qty;
         const lineTotalIncluded = parts.taxIncluded * line.qty;
@@ -447,7 +516,7 @@ api.post("/sales", async (c) => {
             serviceId: line.lineType === "SERVICE" ? line.serviceId : null,
             productId: line.lineType === "PRODUCT" ? line.productId : null,
             qty: line.qty,
-            unitPriceTaxIn: line.unitPriceTaxIn,
+            unitPriceTaxIn,
             taxRate: line.taxRate,
             taxExcludedAmount: lineTotalExcluded,
             taxAmount: lineTotalTax,

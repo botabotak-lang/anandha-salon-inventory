@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { taxIncludedFromExcluded, taxPartsFromIncluded } from "../../shared/tax";
 
 type Product = {
   id: string;
@@ -49,7 +50,8 @@ export function ProductsPage() {
             </button>
           </div>
           <div style={{ fontSize: "0.95rem", color: "#444" }}>
-            税込売価 {p.listPriceTaxIn.toLocaleString()}円 / 税率 {p.defaultTaxRate}% / 仕入単価 {p.standardCost.toLocaleString()}円 / 最小在庫{" "}
+            税込売価 {p.listPriceTaxIn.toLocaleString()}円（税抜
+            {taxPartsFromIncluded(p.listPriceTaxIn, p.defaultTaxRate).taxExcluded.toLocaleString()}円） / 税率 {p.defaultTaxRate}% / 仕入単価 {p.standardCost.toLocaleString()}円 / 最小在庫{" "}
             {p.minStock}
             {!p.active && "（無効）"}
           </div>
@@ -78,7 +80,7 @@ function ProductForm({
     name: string;
     category?: string | null;
     defaultTaxRate: number;
-    listPriceTaxIn: number;
+    listPriceTaxEx: number;
     standardCost: number;
     minStock: number;
     active?: boolean;
@@ -87,10 +89,13 @@ function ProductForm({
   const [name, setName] = useState(initial?.name ?? "");
   const [category, setCategory] = useState(initial?.category ?? "");
   const [defaultTaxRate, setDefaultTaxRate] = useState(initial?.defaultTaxRate ?? 8);
-  const [listPriceTaxIn, setListPriceTaxIn] = useState(initial?.listPriceTaxIn ?? 0);
+  const [listPriceTaxEx, setListPriceTaxEx] = useState(
+    initial ? taxPartsFromIncluded(initial.listPriceTaxIn, initial.defaultTaxRate).taxExcluded : 0
+  );
   const [standardCost, setStandardCost] = useState(initial?.standardCost ?? 0);
   const [minStock, setMinStock] = useState(initial?.minStock ?? 0);
   const [active, setActive] = useState(initial?.active ?? true);
+  const autoTaxIn = taxIncludedFromExcluded(Number(listPriceTaxEx), Number(defaultTaxRate));
 
   return (
     <form
@@ -101,7 +106,7 @@ function ProductForm({
           name,
           category: category || null,
           defaultTaxRate: Number(defaultTaxRate),
-          listPriceTaxIn: Number(listPriceTaxIn),
+          listPriceTaxEx: Number(listPriceTaxEx),
           standardCost: Number(standardCost),
           minStock: Number(minStock),
           active,
@@ -109,7 +114,7 @@ function ProductForm({
         if (!initial) {
           setName("");
           setCategory("");
-          setListPriceTaxIn(0);
+          setListPriceTaxEx(0);
           setStandardCost(0);
           setMinStock(0);
         }
@@ -134,15 +139,16 @@ function ProductForm({
           />
         </div>
         <div style={{ flex: "1 1 140px" }}>
-          <label>税込売価（円）</label>
+          <label>売価（税抜・円）</label>
           <input
             type="number"
             inputMode="numeric"
-            value={listPriceTaxIn}
-            onChange={(e) => setListPriceTaxIn(Number(e.target.value))}
+            value={listPriceTaxEx}
+            onChange={(e) => setListPriceTaxEx(Number(e.target.value))}
           />
         </div>
       </div>
+      <div style={{ fontSize: "0.95rem", color: "#444" }}>税込（自動）: {autoTaxIn.toLocaleString()}円</div>
       <div className="row">
         <div style={{ flex: "1 1 140px" }}>
           <label>仕入単価（円）</label>

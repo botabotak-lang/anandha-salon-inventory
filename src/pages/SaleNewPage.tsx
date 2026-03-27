@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { taxIncludedFromExcluded, taxPartsFromIncluded } from "../../shared/tax";
 
 type Svc = { id: string; name: string; unitPriceTaxIn: number; taxRate: number };
 type Prd = { id: string; name: string; listPriceTaxIn: number; defaultTaxRate: number };
@@ -13,17 +14,18 @@ type CourseTemplate = {
     productId: string;
     qty: number;
     unitPriceTaxIn: number;
+    unitPriceTaxEx?: number;
     taxRate: number;
   }>;
 };
 
 type Line =
-  | { lineType: "SERVICE"; serviceId: string; qty: number; unitPriceTaxIn: number; taxRate: number }
+  | { lineType: "SERVICE"; serviceId: string; qty: number; unitPriceTaxEx: number; taxRate: number }
   | {
       lineType: "PRODUCT";
       productId: string;
       qty: number;
-      unitPriceTaxIn: number;
+      unitPriceTaxEx: number;
       taxRate: number;
       deductStockNow: boolean;
     };
@@ -64,7 +66,13 @@ export function SaleNewPage() {
     if (!s) return;
     setLines((ls) => [
       ...ls,
-      { lineType: "SERVICE", serviceId: s.id, qty: 1, unitPriceTaxIn: s.unitPriceTaxIn, taxRate: s.taxRate },
+      {
+        lineType: "SERVICE",
+        serviceId: s.id,
+        qty: 1,
+        unitPriceTaxEx: taxPartsFromIncluded(s.unitPriceTaxIn, s.taxRate).taxExcluded,
+        taxRate: s.taxRate,
+      },
     ]);
   }
 
@@ -77,7 +85,7 @@ export function SaleNewPage() {
         lineType: "PRODUCT",
         productId: p.id,
         qty: 1,
-        unitPriceTaxIn: p.listPriceTaxIn,
+        unitPriceTaxEx: taxPartsFromIncluded(p.listPriceTaxIn, p.defaultTaxRate).taxExcluded,
         taxRate: p.defaultTaxRate,
         deductStockNow: true,
       },
@@ -91,7 +99,7 @@ export function SaleNewPage() {
       lineType: "PRODUCT",
       productId: it.productId,
       qty: it.qty,
-      unitPriceTaxIn: it.unitPriceTaxIn,
+      unitPriceTaxEx: it.unitPriceTaxEx ?? taxPartsFromIncluded(it.unitPriceTaxIn, it.taxRate).taxExcluded,
       taxRate: it.taxRate,
       // 契約時は入金だけ計上し、お渡し時に在庫を減らす前提
       deductStockNow: false,
@@ -120,7 +128,10 @@ export function SaleNewPage() {
                 customerName: customerName || null,
                 paymentMethod: paymentMethod || null,
                 memo: memo || null,
-                lines,
+                lines: lines.map((ln) => ({
+                  ...ln,
+                  unitPriceTaxIn: taxIncludedFromExcluded(ln.unitPriceTaxEx, ln.taxRate),
+                })),
               }),
             });
             nav(`/sales/${res.sale.id}`);
@@ -194,7 +205,8 @@ export function SaleNewPage() {
                           ? {
                               ...x,
                               serviceId: id,
-                              unitPriceTaxIn: s?.unitPriceTaxIn ?? x.unitPriceTaxIn,
+                              unitPriceTaxEx:
+                                s != null ? taxPartsFromIncluded(s.unitPriceTaxIn, s.taxRate).taxExcluded : x.unitPriceTaxEx,
                               taxRate: s?.taxRate ?? x.taxRate,
                             }
                           : x
@@ -223,7 +235,10 @@ export function SaleNewPage() {
                           ? {
                               ...x,
                               productId: id,
-                              unitPriceTaxIn: p?.listPriceTaxIn ?? x.unitPriceTaxIn,
+                              unitPriceTaxEx:
+                                p != null
+                                  ? taxPartsFromIncluded(p.listPriceTaxIn, p.defaultTaxRate).taxExcluded
+                                  : x.unitPriceTaxEx,
                               taxRate: p?.defaultTaxRate ?? x.taxRate,
                             }
                           : x
@@ -269,15 +284,15 @@ export function SaleNewPage() {
                 />
               </div>
               <div style={{ flex: "1 1 140px" }}>
-                <label>税込単価</label>
+                <label>単価（税抜）</label>
                 <input
                   type="number"
                   inputMode="numeric"
                   min={0}
-                  value={ln.unitPriceTaxIn}
+                  value={ln.unitPriceTaxEx}
                   onChange={(e) =>
                     setLines((ls) =>
-                      ls.map((x, j) => (j === i ? { ...x, unitPriceTaxIn: Number(e.target.value) } : x))
+                      ls.map((x, j) => (j === i ? { ...x, unitPriceTaxEx: Number(e.target.value) } : x))
                     )
                   }
                 />
@@ -295,6 +310,10 @@ export function SaleNewPage() {
                   }
                 />
               </div>
+            </div>
+            <div style={{ fontSize: "0.9rem", color: "#444" }}>
+              税込（自動）: {taxIncludedFromExcluded(ln.unitPriceTaxEx, ln.taxRate).toLocaleString()}円 / 行合計（税込）:{" "}
+              {(taxIncludedFromExcluded(ln.unitPriceTaxEx, ln.taxRate) * ln.qty).toLocaleString()}円
             </div>
           </div>
         ))}

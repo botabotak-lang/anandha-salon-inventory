@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { taxIncludedFromExcluded, taxPartsFromIncluded } from "../../shared/tax";
 
 type Product = {
   id: string;
@@ -13,7 +14,8 @@ type CourseItem = {
   id?: string;
   productId: string;
   qty: number;
-  unitPriceTaxIn: number;
+  unitPriceTaxEx: number;
+  unitPriceTaxIn?: number;
   taxRate: number;
   product?: { name: string };
 };
@@ -38,7 +40,20 @@ export function CourseTemplatesPage() {
       api<{ templates: CourseTemplate[] }>("/api/course-templates"),
     ]);
     setProducts(pr.products.filter((p) => p.active));
-    setTemplates(tp.templates);
+    setTemplates(
+      tp.templates.map((t) => ({
+        ...t,
+        items: t.items.map((it) => ({
+          ...it,
+          unitPriceTaxEx:
+            it.unitPriceTaxEx ??
+            taxPartsFromIncluded(
+              it.unitPriceTaxIn ?? taxIncludedFromExcluded(0, it.taxRate),
+              it.taxRate
+            ).taxExcluded,
+        })),
+      }))
+    );
   }
 
   useEffect(() => {
@@ -76,7 +91,13 @@ export function CourseTemplatesPage() {
             </button>
           </div>
           <div style={{ fontSize: "0.95rem", color: "#444" }}>
-            {t.items.map((it) => `${it.product?.name ?? ""} ×${it.qty}`).join(" / ")}
+            {t.items
+              .map((it) => {
+                const ex = taxPartsFromIncluded(it.unitPriceTaxIn, it.taxRate).taxExcluded;
+                const amountIn = it.unitPriceTaxIn * it.qty;
+                return `${it.product?.name ?? ""} ×${it.qty}（税抜${ex.toLocaleString()}円 / 税込${amountIn.toLocaleString()}円）`;
+              })
+              .join(" / ")}
             {!t.active && "（無効）"}
           </div>
           {editing?.id === t.id && (
@@ -114,7 +135,7 @@ function CourseTemplateForm({
       ? initial.items.map((x) => ({
           productId: x.productId,
           qty: x.qty,
-          unitPriceTaxIn: x.unitPriceTaxIn,
+          unitPriceTaxEx: taxPartsFromIncluded(x.unitPriceTaxIn, x.taxRate).taxExcluded,
           taxRate: x.taxRate,
         }))
       : defaultProduct
@@ -122,7 +143,7 @@ function CourseTemplateForm({
           {
             productId: defaultProduct.id,
             qty: 1,
-            unitPriceTaxIn: defaultProduct.listPriceTaxIn,
+            unitPriceTaxEx: taxPartsFromIncluded(defaultProduct.listPriceTaxIn, defaultProduct.defaultTaxRate).taxExcluded,
             taxRate: defaultProduct.defaultTaxRate,
           },
         ]
@@ -136,7 +157,7 @@ function CourseTemplateForm({
       {
         productId: defaultProduct.id,
         qty: 1,
-        unitPriceTaxIn: defaultProduct.listPriceTaxIn,
+        unitPriceTaxEx: taxPartsFromIncluded(defaultProduct.listPriceTaxIn, defaultProduct.defaultTaxRate).taxExcluded,
         taxRate: defaultProduct.defaultTaxRate,
       },
     ]);
@@ -154,7 +175,7 @@ function CourseTemplateForm({
           items: items.map((x) => ({
             productId: x.productId,
             qty: Number(x.qty),
-            unitPriceTaxIn: Number(x.unitPriceTaxIn),
+            unitPriceTaxEx: Number(x.unitPriceTaxEx),
             taxRate: Number(x.taxRate),
           })),
         });
@@ -167,7 +188,7 @@ function CourseTemplateForm({
                   {
                     productId: defaultProduct.id,
                     qty: 1,
-                    unitPriceTaxIn: defaultProduct.listPriceTaxIn,
+                    unitPriceTaxEx: taxPartsFromIncluded(defaultProduct.listPriceTaxIn, defaultProduct.defaultTaxRate).taxExcluded,
                     taxRate: defaultProduct.defaultTaxRate,
                   },
                 ]
@@ -204,7 +225,10 @@ function CourseTemplateForm({
                     ? {
                         ...x,
                         productId: id,
-                        unitPriceTaxIn: p?.listPriceTaxIn ?? x.unitPriceTaxIn,
+                        unitPriceTaxEx:
+                          p != null
+                            ? taxPartsFromIncluded(p.listPriceTaxIn, p.defaultTaxRate).taxExcluded
+                            : x.unitPriceTaxEx,
                         taxRate: p?.defaultTaxRate ?? x.taxRate,
                       }
                     : x
@@ -232,14 +256,16 @@ function CourseTemplateForm({
               />
             </div>
             <div style={{ flex: "1 1 140px" }}>
-              <label>税込単価</label>
+              <label>単価（税抜）</label>
               <input
                 type="number"
                 inputMode="numeric"
                 min={0}
-                value={it.unitPriceTaxIn}
+                value={it.unitPriceTaxEx}
                 onChange={(e) =>
-                  setItems((rows) => rows.map((x, i) => (i === idx ? { ...x, unitPriceTaxIn: Number(e.target.value) } : x)))
+                  setItems((rows) =>
+                    rows.map((x, i) => (i === idx ? { ...x, unitPriceTaxEx: Number(e.target.value) } : x))
+                  )
                 }
               />
             </div>
@@ -256,6 +282,10 @@ function CourseTemplateForm({
                 }
               />
             </div>
+          </div>
+          <div style={{ fontSize: "0.9rem", color: "#444" }}>
+            税込（自動）: {taxIncludedFromExcluded(it.unitPriceTaxEx, it.taxRate).toLocaleString()}円 / 行合計（税込）:{" "}
+            {(taxIncludedFromExcluded(it.unitPriceTaxEx, it.taxRate) * it.qty).toLocaleString()}円
           </div>
         </div>
       ))}

@@ -9,12 +9,18 @@ export function taxPartsFromIncluded(taxIncluded: number, taxRatePercent: number
     };
   }
   const denom = 100 + taxRatePercent;
-  const taxExcluded = Math.floor((taxIncluded * 100) / denom);
+  const taxExcluded = Math.round((taxIncluded * 100) / denom);
   const taxAmount = taxIncluded - taxExcluded;
   return { taxExcluded, taxAmount, taxIncluded };
 }
 
 export function taxIncludedFromExcluded(taxExcluded: number, taxRatePercent: number) {
   if (taxRatePercent === 0) return taxExcluded;
-  return Math.floor((taxExcluded * (100 + taxRatePercent)) / 100);
+  return Math.round((taxExcluded * (100 + taxRatePercent)) / 100);
+}
+
+export function taxPartsFromExcluded(taxExcluded: number, taxRatePercent: number) {
+  const taxIncluded = taxIncludedFromExcluded(taxExcluded, taxRatePercent);
+  const taxAmount = taxIncluded - taxExcluded;
+  return { taxExcluded, taxAmount, taxIncluded };
 }

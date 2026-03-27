@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { taxIncludedFromExcluded, taxPartsFromIncluded } from "../../shared/tax";
 
 type Service = {
   id: string;
@@ -54,7 +55,8 @@ export function ServicesPage() {
             </button>
           </div>
           <div style={{ fontSize: "0.95rem", color: "#444" }}>
-            {cats.find((c) => c.v === s.category)?.l ?? s.category} / 税込 {s.unitPriceTaxIn.toLocaleString()}円 / 税率{" "}
+            {cats.find((c) => c.v === s.category)?.l ?? s.category} / 税込 {s.unitPriceTaxIn.toLocaleString()}円（税抜
+            {taxPartsFromIncluded(s.unitPriceTaxIn, s.taxRate).taxExcluded.toLocaleString()}円） / 税率{" "}
             {s.taxRate}%
             {!s.active && "（無効）"}
           </div>
@@ -83,7 +85,7 @@ function ServiceForm({
     name: string;
     category: Service["category"];
     taxRate: number;
-    unitPriceTaxIn: number;
+    unitPriceTaxEx: number;
     standardCost?: number;
     active?: boolean;
   }) => Promise<void>;
@@ -91,9 +93,12 @@ function ServiceForm({
   const [name, setName] = useState(initial?.name ?? "");
   const [category, setCategory] = useState<Service["category"]>(initial?.category ?? "MIMILO");
   const [taxRate, setTaxRate] = useState(initial?.taxRate ?? 10);
-  const [unitPriceTaxIn, setUnitPriceTaxIn] = useState(initial?.unitPriceTaxIn ?? 0);
+  const [unitPriceTaxEx, setUnitPriceTaxEx] = useState(
+    initial ? taxPartsFromIncluded(initial.unitPriceTaxIn, initial.taxRate).taxExcluded : 0
+  );
   const [standardCost, setStandardCost] = useState(initial?.standardCost ?? 0);
   const [active, setActive] = useState(initial?.active ?? true);
+  const autoTaxIn = taxIncludedFromExcluded(Number(unitPriceTaxEx), Number(taxRate));
 
   return (
     <form
@@ -104,13 +109,13 @@ function ServiceForm({
           name,
           category,
           taxRate: Number(taxRate),
-          unitPriceTaxIn: Number(unitPriceTaxIn),
+          unitPriceTaxEx: Number(unitPriceTaxEx),
           standardCost: Number(standardCost),
           active,
         });
         if (!initial) {
           setName("");
-          setUnitPriceTaxIn(0);
+          setUnitPriceTaxEx(0);
         }
       }}
     >
@@ -134,15 +139,16 @@ function ServiceForm({
           <input type="number" inputMode="numeric" value={taxRate} onChange={(e) => setTaxRate(Number(e.target.value))} />
         </div>
         <div style={{ flex: "1 1 160px" }}>
-          <label>税込単価（円）</label>
+          <label>単価（税抜・円）</label>
           <input
             type="number"
             inputMode="numeric"
-            value={unitPriceTaxIn}
-            onChange={(e) => setUnitPriceTaxIn(Number(e.target.value))}
+            value={unitPriceTaxEx}
+            onChange={(e) => setUnitPriceTaxEx(Number(e.target.value))}
           />
         </div>
       </div>
+      <div style={{ fontSize: "0.95rem", color: "#444" }}>税込（自動）: {autoTaxIn.toLocaleString()}円</div>
       <div>
         <label>原価（円・既定0）</label>
         <input
