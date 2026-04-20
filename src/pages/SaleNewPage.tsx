@@ -19,6 +19,8 @@ type CourseTemplate = {
   }>;
 };
 
+type MasterCustomer = { id: string; name: string; active: boolean };
+
 type Line =
   | { lineType: "SERVICE"; serviceId: string; qty: number; unitPriceTaxEx: number; taxRate: number }
   | {
@@ -41,6 +43,8 @@ export function SaleNewPage() {
   const [products, setProducts] = useState<Prd[]>([]);
   const [courseTemplates, setCourseTemplates] = useState<CourseTemplate[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [masterCustomers, setMasterCustomers] = useState<MasterCustomer[]>([]);
+  const [customerId, setCustomerId] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [memo, setMemo] = useState("");
@@ -50,14 +54,16 @@ export function SaleNewPage() {
 
   useEffect(() => {
     (async () => {
-      const [sv, pr, ct] = await Promise.all([
+      const [sv, pr, ct, cu] = await Promise.all([
         api<{ services: Svc[] }>("/api/services"),
         api<{ products: Prd[] }>("/api/products"),
         api<{ templates: CourseTemplate[] }>("/api/course-templates"),
+        api<{ customers: MasterCustomer[] }>("/api/customers").catch(() => ({ customers: [] as MasterCustomer[] })),
       ]);
       setServices(sv.services.filter((s) => (s as { active?: boolean }).active !== false));
       setProducts(pr.products.filter((p) => (p as { active?: boolean }).active !== false));
       setCourseTemplates(ct.templates.filter((t) => t.active));
+      setMasterCustomers(cu.customers.filter((c) => c.active));
     })().catch(() => setErr("マスタの取得に失敗しました"));
   }, []);
 
@@ -125,7 +131,8 @@ export function SaleNewPage() {
               method: "POST",
               body: JSON.stringify({
                 occurredAt: new Date(when).toISOString(),
-                customerName: customerName || null,
+                customerId: customerId.trim() || null,
+                customerName: customerId.trim() ? null : customerName.trim() || null,
                 paymentMethod: paymentMethod || null,
                 memo: memo || null,
                 lines: lines.map((ln) => ({
@@ -145,9 +152,25 @@ export function SaleNewPage() {
           <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
         </div>
         <div>
-          <label>お客様名</label>
-          <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="任意（推奨）" />
+          <label>お客様（マスタ）</label>
+          <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+            <option value="">選ばない</option>
+            {masterCustomers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <p style={{ fontSize: "0.82rem", color: "#666", margin: "0.35rem 0 0" }}>
+            マスタにいない場合のみ、下に名前を入力できます。
+          </p>
         </div>
+        {!customerId.trim() && (
+          <div>
+            <label>お客様名（マスタ外）</label>
+            <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="任意" />
+          </div>
+        )}
         <div>
           <label>支払方法</label>
           <input value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} placeholder="現金／カード など" />

@@ -468,8 +468,35 @@ api.post("/stock/adjust", async (c) => {
   return c.json({ movement: m });
 });
 
+/** カルテ集計用: マスタID または 名前のみのレガシー取引をまとめて検索 */
+function saleWhereForCustomer(shopId: string, customerId: string | null, displayName: string): Prisma.SaleWhereInput {
+  const or: Prisma.SaleWhereInput[] = [{ AND: [{ customerId: null }, { customerName: displayName }] }];
+  if (customerId) or.unshift({ customerId });
+  return { shopId, OR: or };
+}
+
+function movementWhereManualForCustomer(
+  shopId: string,
+  customerId: string | null,
+  displayName: string
+): Prisma.StockMovementWhereInput {
+  const or: Prisma.StockMovementWhereInput[] = [
+    { AND: [{ customerId: null }, { customerName: displayName }] },
+  ];
+  if (customerId) or.unshift({ customerId });
+  return { shopId, type: StockMovementType.OUT_MANUAL, OR: or };
+}
+
+function saleWhereInsideMovement(shopId: string, customerId: string | null, displayName: string): Prisma.SaleWhereInput {
+  return { ...saleWhereForCustomer(shopId, customerId, displayName), voidedAt: null };
+}
+
 api.get("/customers/names", async (c) => {
   const shopId = c.get("session").shopId;
+  const masters = await prisma.customer.findMany({
+    where: { shopId, active: true },
+    select: { name: true },
+  });
   const sales = await prisma.sale.findMany({
     where: { shopId, customerName: { not: null } },
     select: { customerName: true },
@@ -479,6 +506,10 @@ api.get("/customers/names", async (c) => {
     select: { customerName: true },
   });
   const set = new Set<string>();
+  for (const m of masters) {
+    const n = m.name?.trim();
+    if (n) set.add(n);
+  }
   for (const s of sales) {
     const n = s.customerName?.trim();
     if (n) set.add(n);
@@ -493,11 +524,26 @@ api.get("/customers/names", async (c) => {
 
 api.get("/customers/summary", async (c) => {
   const shopId = c.get("session").shopId;
-  const name = (c.req.query("customerName") ?? "").trim();
-  if (!name) return c.json({ error: "customerName を指定してください" }, 400);
+  const customerIdParam = (c.req.query("customerId") ?? "").trim();
+  const nameParam = (c.req.query("customerName") ?? "").trim();
 
+  let displayName = nameParam;
+  let customerId: string | null = null;
+
+  if (customerIdParam) {
+    const cust = await prisma.customer.findFirst({
+      where: { id: customerIdParam, shopId },
+    });
+    if (!cust) return c.json({ error: "お客様が見つかりません" }, 404);
+    customerId = cust.id;
+    displayName = cust.name;
+  } else if (!displayName) {
+    return c.json({ error: "customerId または customerName を指定してください" }, 400);
+  }
+
+  const salesWhere = saleWhereForCustomer(shopId, customerId, displayName);
   const sales = await prisma.sale.findMany({
-    where: { shopId, customerName: name },
+    where: salesWhere,
     orderBy: { occurredAt: "desc" },
     include: { lines: { include: { product: true, service: true } } },
   });
@@ -514,19 +560,19 @@ api.get("/customers/summary", async (c) => {
     }
   }
 
+  const manualWhere = movementWhereManualForCustomer(shopId, customerId, displayName);
   const outManualGroups = await prisma.stockMovement.groupBy({
     by: ["productId"],
-    where: { shopId, type: StockMovementType.OUT_MANUAL, customerName: name },
+    where: manualWhere,
     _sum: { qty: true },
   });
 
+  const saleInMovement = saleWhereInsideMovement(shopId, customerId, displayName);
   const outSaleMovements = await prisma.stockMovement.findMany({
     where: {
       shopId,
       type: StockMovementType.OUT_SALE,
-      refSaleLine: {
-        sale: { shopId, customerName: name, voidedAt: null },
-      },
+      refSaleLine: { sale: saleInMovement },
     },
     select: { productId: true, qty: true },
   });
@@ -540,7 +586,7 @@ api.get("/customers/summary", async (c) => {
   }
 
   const manualHistory = await prisma.stockMovement.findMany({
-    where: { shopId, type: StockMovementType.OUT_MANUAL, customerName: name },
+    where: manualWhere,
     orderBy: { occurredAt: "desc" },
     take: 200,
     include: { product: true, createdBy: { select: { name: true } } },
@@ -549,7 +595,7 @@ api.get("/customers/summary", async (c) => {
     where: {
       shopId,
       type: StockMovementType.OUT_SALE,
-      refSaleLine: { sale: { shopId, customerName: name, voidedAt: null } },
+      refSaleLine: { sale: saleInMovement },
     },
     orderBy: { occurredAt: "desc" },
     take: 200,
@@ -580,7 +626,8 @@ api.get("/customers/summary", async (c) => {
     .sort((a, b) => a.name.localeCompare(b.name, "ja"));
 
   return c.json({
-    customerName: name,
+    customerId,
+    customerName: displayName,
     sales: sales.map((s) => ({
       id: s.id,
       occurredAt: s.occurredAt.toISOString(),
@@ -602,25 +649,43 @@ api.get("/customers/summary", async (c) => {
   });
 });
 
-const customerHandoutBody = z.object({
-  customerName: z.string().min(1),
-  occurredAt: z.string().datetime({ offset: true }),
-  items: z
-    .array(
-      z.object({
-        productId: z.string(),
-        qty: z.number().int().positive(),
-      })
-    )
-    .min(1),
-});
+const customerHandoutBody = z
+  .object({
+    customerId: z.string().optional(),
+    customerName: z.string().optional(),
+    occurredAt: z.string().datetime({ offset: true }),
+    items: z
+      .array(
+        z.object({
+          productId: z.string(),
+          qty: z.number().int().positive(),
+        })
+      )
+      .min(1),
+  })
+  .superRefine((data, ctx) => {
+    const hasId = Boolean(data.customerId?.trim());
+    const hasName = Boolean(data.customerName?.trim());
+    if (!hasId && !hasName) {
+      ctx.addIssue({ code: "custom", message: "customerId または customerName が必要です" });
+    }
+  });
 
 api.post("/customers/handout", async (c) => {
   const shopId = c.get("session").shopId;
   const userId = c.get("session").sub;
   const parsed = customerHandoutBody.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "入力を確認してください", details: parsed.error.flatten() }, 400);
-  const customerName = parsed.data.customerName.trim();
+
+  let customerName = parsed.data.customerName?.trim() ?? "";
+  let customerId: string | null = parsed.data.customerId?.trim() || null;
+  if (customerId) {
+    const cust = await prisma.customer.findFirst({ where: { id: customerId, shopId, active: true } });
+    if (!cust) return c.json({ error: "お客様が見つかりません" }, 404);
+    customerName = customerName || cust.name;
+  }
+  if (!customerName) return c.json({ error: "お客様名を確定できませんでした" }, 400);
+
   const occurredAt = new Date(parsed.data.occurredAt);
 
   const mergedQty = new Map<string, number>();
@@ -662,6 +727,7 @@ api.post("/customers/handout", async (c) => {
             unitCostSnapshot: p.standardCost,
             occurredAt,
             reason: "お客様カルテから記録",
+            customerId,
             customerName,
             createdByUserId: userId,
           },
@@ -679,14 +745,77 @@ api.post("/customers/handout", async (c) => {
     }
     if (msg.startsWith("STOCK_SHORT:")) {
       const parts = msg.split(":");
-      const name = parts[1] ?? "商品";
+      const pname = parts[1] ?? "商品";
       const bal = parts[2] ?? "?";
       const need = parts[3] ?? "?";
-      return c.json({ error: `在庫が足りません（${name}: 残り${bal}個、出そうとした数量${need}個）` }, 400);
+      return c.json({ error: `在庫が足りません（${pname}: 残り${bal}個、出そうとした数量${need}個）` }, 400);
     }
     console.error("[customers/handout]", e);
     return c.json({ error: "記録に失敗しました。しばらくしてから再度お試しください。" }, 500);
   }
+});
+
+const customerCreateBody = z.object({
+  name: z.string().min(1),
+  phone: z.string().optional().nullable(),
+  memo: z.string().optional().nullable(),
+  active: z.boolean().optional(),
+});
+
+api.get("/customers", async (c) => {
+  const shopId = c.get("session").shopId;
+  const list = await prisma.customer.findMany({
+    where: { shopId },
+    orderBy: [{ active: "desc" }, { name: "asc" }],
+  });
+  return c.json({ customers: list });
+});
+
+api.post("/customers", async (c) => {
+  const shopId = c.get("session").shopId;
+  const parsed = customerCreateBody.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "入力を確認してください", details: parsed.error.flatten() }, 400);
+  const row = await prisma.customer.create({
+    data: {
+      shopId,
+      name: parsed.data.name.trim(),
+      phone: parsed.data.phone?.trim() || null,
+      memo: parsed.data.memo?.trim() || null,
+      active: parsed.data.active ?? true,
+    },
+  });
+  return c.json({ customer: row });
+});
+
+api.patch("/customers/:id", async (c) => {
+  const shopId = c.get("session").shopId;
+  const id = c.req.param("id");
+  const parsed = customerCreateBody.partial().safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "入力を確認してください" }, 400);
+  const existing = await prisma.customer.findFirst({ where: { id, shopId } });
+  if (!existing) return c.json({ error: "見つかりません" }, 404);
+  const row = await prisma.customer.update({
+    where: { id },
+    data: {
+      ...(parsed.data.name != null ? { name: parsed.data.name.trim() } : {}),
+      ...(parsed.data.phone !== undefined ? { phone: parsed.data.phone?.trim() || null } : {}),
+      ...(parsed.data.memo !== undefined ? { memo: parsed.data.memo?.trim() || null } : {}),
+      ...(parsed.data.active != null ? { active: parsed.data.active } : {}),
+    },
+  });
+  return c.json({ customer: row });
+});
+
+api.delete("/customers/:id", async (c) => {
+  const shopId = c.get("session").shopId;
+  const id = c.req.param("id");
+  const existing = await prisma.customer.findFirst({ where: { id, shopId } });
+  if (!existing) return c.json({ error: "見つかりません" }, 404);
+  const row = await prisma.customer.update({
+    where: { id },
+    data: { active: false },
+  });
+  return c.json({ customer: row });
 });
 
 const saleLineIn = z.discriminatedUnion("lineType", [
@@ -711,6 +840,7 @@ const saleLineIn = z.discriminatedUnion("lineType", [
 
 const saleCreate = z.object({
   occurredAt: z.string().datetime({ offset: true }),
+  customerId: z.string().optional().nullable(),
   customerName: z.string().optional().nullable(),
   paymentMethod: z.string().optional().nullable(),
   memo: z.string().optional().nullable(),
@@ -723,13 +853,24 @@ api.post("/sales", async (c) => {
   const parsed = saleCreate.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "明細を確認してください", details: parsed.error.flatten() }, 400);
 
+  let resolvedCustomerId: string | null = parsed.data.customerId?.trim() || null;
+  let resolvedCustomerName = parsed.data.customerName?.trim() || null;
+  if (resolvedCustomerId) {
+    const cust = await prisma.customer.findFirst({
+      where: { id: resolvedCustomerId, shopId, active: true },
+    });
+    if (!cust) return c.json({ error: "お客様マスタに該当するお客様が見つかりません" }, 404);
+    resolvedCustomerName = resolvedCustomerName || cust.name;
+  }
+
   try {
     const sale = await prisma.$transaction(async (tx) => {
       const s = await tx.sale.create({
         data: {
           shopId,
           occurredAt: new Date(parsed.data.occurredAt),
-          customerName: parsed.data.customerName ?? null,
+          customerId: resolvedCustomerId,
+          customerName: resolvedCustomerName,
           paymentMethod: parsed.data.paymentMethod ?? null,
           memo: parsed.data.memo ?? null,
           createdByUserId: userId,
@@ -777,7 +918,8 @@ api.post("/sales", async (c) => {
               unitCostSnapshot: prod.standardCost,
               occurredAt: new Date(parsed.data.occurredAt),
               reason: "販売連動",
-              customerName: parsed.data.customerName?.trim() || null,
+              customerId: resolvedCustomerId,
+              customerName: resolvedCustomerName,
               refSaleLineId: sl.id,
               createdByUserId: userId,
             },

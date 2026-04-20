@@ -27,7 +27,7 @@ export function Layout({ children }: { children: ReactNode }) {
           売上一覧
         </NavLink>
         <NavLink to="/customers" className={({ isActive }) => (isActive ? "active" : "")}>
-          お客様
+          お客様マスタ
         </NavLink>
         <NavLink to="/stock" className={({ isActive }) => (isActive ? "active" : "")}>
           在庫

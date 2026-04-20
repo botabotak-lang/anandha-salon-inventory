@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 
 function isoLocal(d: Date) {
@@ -39,6 +39,7 @@ type HandoutRow = {
 };
 
 type SummaryResponse = {
+  customerId: string | null;
   customerName: string;
   sales: SummarySale[];
   products: SummaryProduct[];
@@ -48,63 +49,55 @@ type SummaryResponse = {
 type ExtraLine = { id: string; productId: string; qty: string };
 
 export function CustomerPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const nameFromUrl = searchParams.get("name") ?? "";
+  const { customerId: customerIdParam } = useParams<{ customerId: string }>();
+  const customerId = customerIdParam ?? "";
 
-  const [nameInput, setNameInput] = useState(nameFromUrl);
-  const [nameList, setNameList] = useState<string[]>([]);
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [activeProducts, setActiveProducts] = useState<{ id: string; name: string }[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
-  /** カルテ内商品ごとの「今回渡す」数量（空＝送らない） */
   const [handThisByProduct, setHandThisByProduct] = useState<Record<string, string>>({});
   const [extraLines, setExtraLines] = useState<ExtraLine[]>([]);
   const [handWhen, setHandWhen] = useState(isoLocal(new Date()));
 
   const summaryInitKey = useMemo(() => {
     if (!summary) return "";
-    return `${summary.customerName}:${summary.products.map((p) => p.productId).join(",")}`;
+    return `${summary.customerId ?? ""}:${summary.customerName}:${summary.products.map((p) => p.productId).join(",")}`;
   }, [summary]);
 
-  const loadNames = useCallback(async () => {
-    const res = await api<{ names: string[] }>("/api/customers/names");
-    setNameList(res.names);
-  }, []);
-
-  const loadSummary = useCallback(async (customerName: string) => {
-    const q = new URLSearchParams({ customerName });
+  const loadSummary = useCallback(async (cid: string) => {
+    const q = new URLSearchParams({ customerId: cid });
     const res = await api<SummaryResponse>(`/api/customers/summary?${q.toString()}`);
     setSummary(res);
   }, []);
 
   useEffect(() => {
-    loadNames().catch((e) => setErr(e instanceof Error ? e.message : "失敗"));
     (async () => {
       try {
         const res = await api<{ products: { id: string; name: string; active?: boolean }[] }>("/api/products");
         const list = res.products.filter((p) => (p as { active?: boolean }).active !== false);
         setActiveProducts(list);
       } catch {
-        /* マスタ未取得でもカルテは使える */
+        /* ignore */
       }
     })();
-  }, [loadNames]);
+  }, []);
 
   useEffect(() => {
-    setNameInput(nameFromUrl);
-    if (!nameFromUrl.trim()) {
+    if (!customerId.trim()) {
       setSummary(null);
+      setErr(null);
       return;
     }
     setErr(null);
-    loadSummary(nameFromUrl.trim())
+    loadSummary(customerId.trim())
+      .then(() => setErr(null))
       .catch((e) => {
         setSummary(null);
         setErr(e instanceof Error ? e.message : "カルテの取得に失敗しました");
       });
-  }, [nameFromUrl, loadSummary]);
+  }, [customerId, loadSummary]);
 
   useEffect(() => {
     if (!summary) {
@@ -116,16 +109,6 @@ export function CustomerPage() {
     setExtraLines([]);
   }, [summaryInitKey]);
 
-  function openCart() {
-    const n = nameInput.trim();
-    if (!n) {
-      setErr("お客様名を入力してください");
-      return;
-    }
-    setErr(null);
-    setSearchParams({ name: n });
-  }
-
   function parseQty(s: string): number {
     const n = Number.parseInt(String(s).trim(), 10);
     return Number.isFinite(n) && n > 0 ? n : 0;
@@ -133,8 +116,7 @@ export function CustomerPage() {
 
   async function submitHandout(e: React.FormEvent) {
     e.preventDefault();
-    const customerName = nameFromUrl.trim();
-    if (!customerName || !summary) return;
+    if (!customerId.trim() || !summary) return;
     setMsg(null);
     setErr(null);
 
@@ -157,14 +139,13 @@ export function CustomerPage() {
       const res = await api<{ count: number }>("/api/customers/handout", {
         method: "POST",
         body: JSON.stringify({
-          customerName,
+          customerId: customerId.trim(),
           items,
           occurredAt: new Date(handWhen).toISOString(),
         }),
       });
       setMsg(`お渡しを${res.count}件記録し、在庫を減らしました`);
-      await loadSummary(customerName);
-      await loadNames();
+      await loadSummary(customerId.trim());
       setHandWhen(isoLocal(new Date()));
     } catch (er) {
       setErr(er instanceof Error ? er.message : "記録に失敗しました");
@@ -185,39 +166,27 @@ export function CustomerPage() {
     return activeProducts[0]?.id ?? "";
   }
 
+  if (!customerId.trim()) {
+    return (
+      <div>
+        <h1 style={{ fontSize: "1.35rem" }}>お客様カルテ</h1>
+        <p className="alert">お客様が指定されていません。</p>
+        <Link to="/customers">お客様マスタへ</Link>
+      </div>
+    );
+  }
+
   return (
     <div>
+      <p style={{ marginBottom: "0.75rem" }}>
+        <Link to="/customers">お客様マスタへ戻る</Link>
+      </p>
       <h1 style={{ fontSize: "1.35rem" }}>お客様カルテ</h1>
       <p style={{ fontSize: "0.95rem", color: "#444", marginTop: "-0.25rem" }}>
-        コースで売上に載せた<strong>予定数量</strong>と、実際に渡した<strong>お渡し記録</strong>をまとめて見られます。複数商品を一度に選んで<strong>在庫をまとめて減らせます</strong>。
+        マスタ登録済みのお客様の<strong>予定数量</strong>と<strong>お渡し記録</strong>です。複数商品を一度に記録して<strong>在庫をまとめて減らせます</strong>。
       </p>
       {err && <div className="alert error">{err}</div>}
       {msg && <div className="alert">{msg}</div>}
-
-      <div className="card stack">
-        <strong>お客様を選ぶ</strong>
-        <div className="stack">
-          <div>
-            <label htmlFor="cust-name">お客様名</label>
-            <input
-              id="cust-name"
-              list="customer-name-options"
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              placeholder="例：山田 花子"
-              autoComplete="off"
-            />
-            <datalist id="customer-name-options">
-              {nameList.map((n) => (
-                <option key={n} value={n} />
-              ))}
-            </datalist>
-          </div>
-          <button type="button" className="primary" onClick={openCart}>
-            カルテを見る
-          </button>
-        </div>
-      </div>
 
       {summary && (
         <>

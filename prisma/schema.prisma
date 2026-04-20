@@ -17,6 +17,21 @@ model Shop {
   sales     Sale[]
   movements StockMovement[]
   courseTemplates CourseTemplate[]
+  customers Customer[]
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name      String
+  phone     String?
+  memo      String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sales     Sale[]
+  movements StockMovement[]
 }
 
 model User {
@@ -87,6 +102,8 @@ model Sale {
   shopId          String
   shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
   occurredAt      DateTime
+  customerId      String?
+  customer        Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
   customerName    String?
   paymentMethod   String?
   memo            String?
@@ -127,6 +144,8 @@ model StockMovement {
   unitCostSnapshot   Int?
   reason             String?
   occurredAt         DateTime
+  customerId         String?
+  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
   /// お渡し先のお客様名（カルテからの手動出庫・販売連動出庫で設定）
   customerName       String?
   refSaleLineId      String?
