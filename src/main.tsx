@@ -17,6 +17,7 @@ import { AccountPage } from "./pages/AccountPage";
 import { CourseTemplatesPage } from "./pages/CourseTemplatesPage";
 import { CustomerPage } from "./pages/CustomerPage";
 import { CustomersPage } from "./pages/CustomersPage";
+import { KartePage } from "./pages/KartePage";
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -68,6 +69,14 @@ createRoot(document.getElementById("root")!).render(
           element={
             <Layout>
               <StockPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/karte"
+          element={
+            <Layout>
+              <KartePage />
             </Layout>
           }
         />
