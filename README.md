@@ -48,7 +48,7 @@ npm run dev
 
 | 名前 | 例 | 説明 |
 |:---|:---|:---|
-| `DATABASE_URL` | `file:./prisma/dev.db` | SQLite。本番は PostgreSQL の接続文字列に差し替え |
+| `DATABASE_URL` | `file:./prisma/dev.db` | **ローカルは SQLite**（このURLのまま）。本番で PostgreSQL に切り替える場合は `prisma/schema.prisma` の `datasource db` の `provider` を `postgresql` に変更し、接続文字列に合わせて `npx prisma db push` をやり直してください。 |
 | `SESSION_SECRET` | 32文字以上のランダム | ログイン用トークンの署名鍵 |
 | `PORT` | `3002` | API ポート（`vite.config.ts` の proxy と一致させる） |
 

@@ -127,6 +127,8 @@ model StockMovement {
   unitCostSnapshot   Int?
   reason             String?
   occurredAt         DateTime
+  /// お渡し先のお客様名（カルテからの手動出庫・販売連動出庫で設定）
+  customerName       String?
   refSaleLineId      String?
   refSaleLine        SaleLine?         @relation(fields: [refSaleLineId], references: [id])
   createdByUserId    String

@@ -134,6 +134,7 @@ td {
   padding: 0.65rem 0.75rem;
   border-radius: 10px;
   margin-bottom: 0.75rem;
+  white-space: pre-wrap;
 }
 
 .error {

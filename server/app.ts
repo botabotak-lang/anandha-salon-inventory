@@ -47,20 +47,36 @@ declare module "hono" {
 }
 
 api.post("/auth/login", async (c) => {
-  const body = z.object({ email: z.string().email(), password: z.string().min(1) }).safeParse(await c.req.json());
-  if (!body.success) return c.json({ error: "入力が不正です" }, 400);
-  const user = await prisma.user.findUnique({ where: { email: body.data.email } });
-  if (!user || !(await bcrypt.compare(body.data.password, user.passwordHash))) {
-    return c.json({ error: "メールまたはパスワードが違います" }, 401);
+  try {
+    const body = z.object({ email: z.string().email(), password: z.string().min(1) }).safeParse(await c.req.json());
+    if (!body.success) return c.json({ error: "入力が不正です" }, 400);
+    const user = await prisma.user.findUnique({ where: { email: body.data.email } });
+    if (!user || !(await bcrypt.compare(body.data.password, user.passwordHash))) {
+      return c.json({ error: "メールまたはパスワードが違います" }, 401);
+    }
+    const token = await signSession({
+      sub: user.id,
+      shopId: user.shopId,
+      email: user.email,
+      name: user.name,
+    });
+    setSessionCookie(c, token);
+    return c.json({ ok: true, user: { id: user.id, email: user.email, name: user.name } });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[auth/login]", e);
+    if (msg.includes("SESSION_SECRET")) {
+      return c.json({ error: "サーバー設定エラー: SESSION_SECRET を16文字以上で .env に設定してください。" }, 503);
+    }
+    return c.json(
+      {
+        error:
+          "データベースに接続できません。.env の DATABASE_URL を確認し、ターミナルで npx prisma db push と npx prisma db seed を実行してください。",
+        detail: process.env.NODE_ENV !== "production" ? msg : undefined,
+      },
+      503
+    );
   }
-  const token = await signSession({
-    sub: user.id,
-    shopId: user.shopId,
-    email: user.email,
-    name: user.name,
-  });
-  setSessionCookie(c, token);
-  return c.json({ ok: true, user: { id: user.id, email: user.email, name: user.name } });
 });
 
 api.post("/auth/logout", async (c) => {
@@ -396,6 +412,7 @@ const stockOutManual = z.object({
   qty: z.number().int().positive(),
   occurredAt: z.string().datetime({ offset: true }),
   reason: z.string().min(1),
+  customerName: z.string().optional().nullable(),
 });
 
 api.post("/stock/out-manual", async (c) => {
@@ -416,6 +433,7 @@ api.post("/stock/out-manual", async (c) => {
       unitCostSnapshot: p.standardCost,
       occurredAt: new Date(parsed.data.occurredAt),
       reason: parsed.data.reason,
+      customerName: parsed.data.customerName?.trim() || null,
       createdByUserId: userId,
     },
   });
@@ -444,6 +462,173 @@ api.post("/stock/adjust", async (c) => {
       qty: parsed.data.qty,
       occurredAt: new Date(parsed.data.occurredAt),
       reason: parsed.data.reason,
+      createdByUserId: userId,
+    },
+  });
+  return c.json({ movement: m });
+});
+
+api.get("/customers/names", async (c) => {
+  const shopId = c.get("session").shopId;
+  const sales = await prisma.sale.findMany({
+    where: { shopId, customerName: { not: null } },
+    select: { customerName: true },
+  });
+  const movements = await prisma.stockMovement.findMany({
+    where: { shopId, type: StockMovementType.OUT_MANUAL, customerName: { not: null } },
+    select: { customerName: true },
+  });
+  const set = new Set<string>();
+  for (const s of sales) {
+    const n = s.customerName?.trim();
+    if (n) set.add(n);
+  }
+  for (const m of movements) {
+    const n = m.customerName?.trim();
+    if (n) set.add(n);
+  }
+  const names = [...set].sort((a, b) => a.localeCompare(b, "ja"));
+  return c.json({ names });
+});
+
+api.get("/customers/summary", async (c) => {
+  const shopId = c.get("session").shopId;
+  const name = (c.req.query("customerName") ?? "").trim();
+  if (!name) return c.json({ error: "customerName を指定してください" }, 400);
+
+  const sales = await prisma.sale.findMany({
+    where: { shopId, customerName: name },
+    orderBy: { occurredAt: "desc" },
+    include: { lines: { include: { product: true, service: true } } },
+  });
+
+  const planned = new Map<string, { productId: string; name: string; qty: number }>();
+  for (const sale of sales) {
+    if (sale.voidedAt) continue;
+    for (const line of sale.lines) {
+      if (line.lineType !== SaleLineType.PRODUCT || !line.productId || !line.product) continue;
+      const key = line.productId;
+      const row = planned.get(key) ?? { productId: key, name: line.product.name, qty: 0 };
+      row.qty += line.qty;
+      planned.set(key, row);
+    }
+  }
+
+  const outManualGroups = await prisma.stockMovement.groupBy({
+    by: ["productId"],
+    where: { shopId, type: StockMovementType.OUT_MANUAL, customerName: name },
+    _sum: { qty: true },
+  });
+
+  const outSaleMovements = await prisma.stockMovement.findMany({
+    where: {
+      shopId,
+      type: StockMovementType.OUT_SALE,
+      refSaleLine: {
+        sale: { shopId, customerName: name, voidedAt: null },
+      },
+    },
+    select: { productId: true, qty: true },
+  });
+
+  const handedByProduct = new Map<string, number>();
+  for (const g of outManualGroups) {
+    handedByProduct.set(g.productId, (handedByProduct.get(g.productId) ?? 0) + (g._sum.qty ?? 0));
+  }
+  for (const m of outSaleMovements) {
+    handedByProduct.set(m.productId, (handedByProduct.get(m.productId) ?? 0) + m.qty);
+  }
+
+  const manualHistory = await prisma.stockMovement.findMany({
+    where: { shopId, type: StockMovementType.OUT_MANUAL, customerName: name },
+    orderBy: { occurredAt: "desc" },
+    take: 200,
+    include: { product: true, createdBy: { select: { name: true } } },
+  });
+  const saleHistory = await prisma.stockMovement.findMany({
+    where: {
+      shopId,
+      type: StockMovementType.OUT_SALE,
+      refSaleLine: { sale: { shopId, customerName: name, voidedAt: null } },
+    },
+    orderBy: { occurredAt: "desc" },
+    take: 200,
+    include: { product: true, createdBy: { select: { name: true } } },
+  });
+  const history = [...manualHistory, ...saleHistory].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+
+  const allIds = new Set<string>([...planned.keys(), ...handedByProduct.keys()]);
+  const productsMeta = await prisma.product.findMany({
+    where: { shopId, id: { in: [...allIds] } },
+    select: { id: true, name: true },
+  });
+  const idToName = new Map(productsMeta.map((p) => [p.id, p.name]));
+
+  const products = [...allIds]
+    .map((productId) => {
+      const pRow = planned.get(productId);
+      const plannedQty = pRow?.qty ?? 0;
+      const handedQty = handedByProduct.get(productId) ?? 0;
+      return {
+        productId,
+        name: pRow?.name ?? idToName.get(productId) ?? "（削除済み商品）",
+        plannedQty,
+        handedQty,
+        remainingQty: plannedQty - handedQty,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, "ja"));
+
+  return c.json({
+    customerName: name,
+    sales: sales.map((s) => ({
+      id: s.id,
+      occurredAt: s.occurredAt.toISOString(),
+      voided: !!s.voidedAt,
+      memo: s.memo,
+      totalTaxIn: s.lines.reduce((acc, l) => acc + l.taxIncludedAmount, 0),
+    })),
+    products,
+    handoutHistory: history.slice(0, 200).map((m) => ({
+      id: m.id,
+      occurredAt: m.occurredAt.toISOString(),
+      productId: m.productId,
+      productName: m.product.name,
+      qty: m.qty,
+      source: m.type === StockMovementType.OUT_SALE ? "販売連動" : "カルテ",
+      reason: m.reason,
+      registeredBy: m.createdBy.name,
+    })),
+  });
+});
+
+const customerHandoutBody = z.object({
+  customerName: z.string().min(1),
+  productId: z.string(),
+  qty: z.number().int().positive(),
+  occurredAt: z.string().datetime({ offset: true }),
+});
+
+api.post("/customers/handout", async (c) => {
+  const shopId = c.get("session").shopId;
+  const userId = c.get("session").sub;
+  const parsed = customerHandoutBody.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "入力を確認してください", details: parsed.error.flatten() }, 400);
+  const customerName = parsed.data.customerName.trim();
+  const p = await prisma.product.findFirst({ where: { id: parsed.data.productId, shopId } });
+  if (!p) return c.json({ error: "商品が見つかりません" }, 404);
+  const bal = await stockQtyForProduct(prisma, p.id);
+  if (bal < parsed.data.qty) return c.json({ error: "在庫が足りません" }, 400);
+  const m = await prisma.stockMovement.create({
+    data: {
+      shopId,
+      type: StockMovementType.OUT_MANUAL,
+      productId: p.id,
+      qty: parsed.data.qty,
+      unitCostSnapshot: p.standardCost,
+      occurredAt: new Date(parsed.data.occurredAt),
+      reason: "お客様カルテから記録",
+      customerName,
       createdByUserId: userId,
     },
   });
@@ -538,6 +723,7 @@ api.post("/sales", async (c) => {
               unitCostSnapshot: prod.standardCost,
               occurredAt: new Date(parsed.data.occurredAt),
               reason: "販売連動",
+              customerName: parsed.data.customerName?.trim() || null,
               refSaleLineId: sl.id,
               createdByUserId: userId,
             },
@@ -874,7 +1060,7 @@ api.get("/export/csv/inventory", async (c) => {
 
   lines.push("");
   lines.push("【期間内 入出庫履歴】");
-  lines.push(["日時", "種別", "商品名", "数量", "仕入単価", "原価金額", "理由", "登録者"].join(","));
+  lines.push(["日時", "種別", "商品名", "数量", "仕入単価", "原価金額", "理由", "お客様名", "登録者"].join(","));
   const movements = await prisma.stockMovement.findMany({
     where: { shopId, occurredAt: { gte: fromDate, lte: toDate } },
     orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }],
@@ -893,6 +1079,7 @@ api.get("/export/csv/inventory", async (c) => {
         esc(unitCost),
         esc(amount),
         esc(m.reason),
+        esc(m.customerName),
         esc(m.createdBy.name),
       ].join(",")
     );

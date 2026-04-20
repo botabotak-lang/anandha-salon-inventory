@@ -17,9 +17,16 @@ export function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      const data = await res.json().catch(() => ({}));
+      const raw = await res.text();
+      let data: { error?: string; detail?: string } = {};
+      try {
+        data = raw ? (JSON.parse(raw) as typeof data) : {};
+      } catch {
+        /* 非JSONのエラーページなど */
+      }
       if (!res.ok) {
-        setErr(data.error ?? "ログインできませんでした");
+        const base = data.error ?? `ログインできませんでした（HTTP ${res.status}）`;
+        setErr(data.detail ? `${base}\n${data.detail}` : base);
         return;
       }
       nav("/", { replace: true });
