@@ -50,9 +50,27 @@ export function ServicesPage() {
         <div key={s.id} className="card stack">
           <div className="row" style={{ justifyContent: "space-between" }}>
             <strong>{s.name}</strong>
-            <button type="button" onClick={() => setEditing(s)}>
-              編集
-            </button>
+            <div className="row" style={{ gap: "0.35rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setEditing(s)}>
+                編集
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!confirm(`${s.name} を削除しますか？この操作は元に戻せません。`)) return;
+                  setErr(null);
+                  try {
+                    await api(`/api/services/${s.id}`, { method: "DELETE" });
+                    if (editing?.id === s.id) setEditing(null);
+                    await load();
+                  } catch (e) {
+                    setErr(e instanceof Error ? e.message : "削除に失敗しました");
+                  }
+                }}
+              >
+                削除
+              </button>
+            </div>
           </div>
           <div style={{ fontSize: "0.95rem", color: "#444" }}>
             {cats.find((c) => c.v === s.category)?.l ?? s.category} / 税込 {s.unitPriceTaxIn.toLocaleString()}円（税抜

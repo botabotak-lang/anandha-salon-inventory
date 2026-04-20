@@ -3,8 +3,7 @@ import { cors } from "hono/cors";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import type { Prisma } from "@prisma/client";
-import { SaleLineType, StockMovementType } from "@prisma/client";
+import { Prisma, SaleLineType, StockMovementType } from "@prisma/client";
 import { prisma } from "./prisma.js";
 import { clearSessionCookie, getSession, setSessionCookie, signSession } from "./lib/auth.js";
 import { stockQtyForProduct } from "./lib/stock.js";
@@ -181,6 +180,22 @@ api.patch("/products/:id", async (c) => {
   return c.json({ product: p });
 });
 
+api.delete("/products/:id", async (c) => {
+  const shopId = c.get("session").shopId;
+  const id = c.req.param("id");
+  const existing = await prisma.product.findFirst({ where: { id, shopId } });
+  if (!existing) return c.json({ error: "見つかりません" }, 404);
+  try {
+    await prisma.product.delete({ where: { id } });
+    return c.json({ ok: true });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+      return c.json({ error: "売上明細に使用されているため削除できません" }, 409);
+    }
+    throw e;
+  }
+});
+
 api.get("/services", async (c) => {
   const shopId = c.get("session").shopId;
   const list = await prisma.service.findMany({ where: { shopId }, orderBy: { name: "asc" } });
@@ -258,6 +273,22 @@ api.patch("/services/:id", async (c) => {
     },
   });
   return c.json({ service: s });
+});
+
+api.delete("/services/:id", async (c) => {
+  const shopId = c.get("session").shopId;
+  const id = c.req.param("id");
+  const existing = await prisma.service.findFirst({ where: { id, shopId } });
+  if (!existing) return c.json({ error: "見つかりません" }, 404);
+  try {
+    await prisma.service.delete({ where: { id } });
+    return c.json({ ok: true });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+      return c.json({ error: "売上明細に使用されているため削除できません" }, 409);
+    }
+    throw e;
+  }
 });
 
 api.get("/course-templates", async (c) => {
@@ -351,6 +382,15 @@ api.patch("/course-templates/:id", async (c) => {
     });
   });
   return c.json({ template: updated });
+});
+
+api.delete("/course-templates/:id", async (c) => {
+  const shopId = c.get("session").shopId;
+  const id = c.req.param("id");
+  const existing = await prisma.courseTemplate.findFirst({ where: { id, shopId } });
+  if (!existing) return c.json({ error: "見つかりません" }, 404);
+  await prisma.courseTemplate.delete({ where: { id } });
+  return c.json({ ok: true });
 });
 
 api.get("/stock/summary", async (c) => {
@@ -816,6 +856,16 @@ api.delete("/customers/:id", async (c) => {
     data: { active: false },
   });
   return c.json({ customer: row });
+});
+
+api.delete("/customers/:id/purge", async (c) => {
+  const shopId = c.get("session").shopId;
+  const id = c.req.param("id");
+  const existing = await prisma.customer.findFirst({ where: { id, shopId } });
+  if (!existing) return c.json({ error: "見つかりません" }, 404);
+  if (existing.active) return c.json({ error: "有効なお客様は削除できません。先に無効化してください" }, 400);
+  await prisma.customer.delete({ where: { id } });
+  return c.json({ ok: true });
 });
 
 const saleLineIn = z.discriminatedUnion("lineType", [

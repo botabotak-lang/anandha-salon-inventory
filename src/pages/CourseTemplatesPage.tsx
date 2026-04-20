@@ -86,9 +86,27 @@ export function CourseTemplatesPage() {
             <strong>
               {t.name}（{t.months}ヶ月）
             </strong>
-            <button type="button" onClick={() => setEditing(t)}>
-              編集
-            </button>
+            <div className="row" style={{ gap: "0.35rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setEditing(t)}>
+                編集
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!confirm(`${t.name} を削除しますか？この操作は元に戻せません。`)) return;
+                  setErr(null);
+                  try {
+                    await api(`/api/course-templates/${t.id}`, { method: "DELETE" });
+                    if (editing?.id === t.id) setEditing(null);
+                    await load();
+                  } catch (e) {
+                    setErr(e instanceof Error ? e.message : "削除に失敗しました");
+                  }
+                }}
+              >
+                削除
+              </button>
+            </div>
           </div>
           <div style={{ fontSize: "0.95rem", color: "#444" }}>
             {t.items

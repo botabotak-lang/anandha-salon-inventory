@@ -45,9 +45,27 @@ export function ProductsPage() {
         <div key={p.id} className="card stack">
           <div className="row" style={{ justifyContent: "space-between" }}>
             <strong>{p.name}</strong>
-            <button type="button" onClick={() => setEditing(p)}>
-              編集
-            </button>
+            <div className="row" style={{ gap: "0.35rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setEditing(p)}>
+                編集
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!confirm(`${p.name} を削除しますか？この操作は元に戻せません。`)) return;
+                  setErr(null);
+                  try {
+                    await api(`/api/products/${p.id}`, { method: "DELETE" });
+                    if (editing?.id === p.id) setEditing(null);
+                    await load();
+                  } catch (e) {
+                    setErr(e instanceof Error ? e.message : "削除に失敗しました");
+                  }
+                }}
+              >
+                削除
+              </button>
+            </div>
           </div>
           <div style={{ fontSize: "0.95rem", color: "#444" }}>
             税込売価 {p.listPriceTaxIn.toLocaleString()}円（税抜

@@ -82,6 +82,25 @@ export function CustomersPage() {
                   無効化
                 </button>
               )}
+              {!c.active && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!confirm(`${c.name} さんを完全に削除しますか？この操作は元に戻せません。`)) return;
+                    setMsg(null);
+                    setErr(null);
+                    try {
+                      await api(`/api/customers/${c.id}/purge`, { method: "DELETE" });
+                      setMsg("完全削除しました");
+                      await load();
+                    } catch (e) {
+                      setErr(e instanceof Error ? e.message : "失敗");
+                    }
+                  }}
+                >
+                  完全削除
+                </button>
+              )}
             </div>
           </div>
           <div style={{ fontSize: "0.95rem", color: "#444" }}>
