@@ -604,9 +604,15 @@ api.get("/customers/summary", async (c) => {
 
 const customerHandoutBody = z.object({
   customerName: z.string().min(1),
-  productId: z.string(),
-  qty: z.number().int().positive(),
   occurredAt: z.string().datetime({ offset: true }),
+  items: z
+    .array(
+      z.object({
+        productId: z.string(),
+        qty: z.number().int().positive(),
+      })
+    )
+    .min(1),
 });
 
 api.post("/customers/handout", async (c) => {
@@ -615,24 +621,72 @@ api.post("/customers/handout", async (c) => {
   const parsed = customerHandoutBody.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "入力を確認してください", details: parsed.error.flatten() }, 400);
   const customerName = parsed.data.customerName.trim();
-  const p = await prisma.product.findFirst({ where: { id: parsed.data.productId, shopId } });
-  if (!p) return c.json({ error: "商品が見つかりません" }, 404);
-  const bal = await stockQtyForProduct(prisma, p.id);
-  if (bal < parsed.data.qty) return c.json({ error: "在庫が足りません" }, 400);
-  const m = await prisma.stockMovement.create({
-    data: {
-      shopId,
-      type: StockMovementType.OUT_MANUAL,
-      productId: p.id,
-      qty: parsed.data.qty,
-      unitCostSnapshot: p.standardCost,
-      occurredAt: new Date(parsed.data.occurredAt),
-      reason: "お客様カルテから記録",
-      customerName,
-      createdByUserId: userId,
-    },
-  });
-  return c.json({ movement: m });
+  const occurredAt = new Date(parsed.data.occurredAt);
+
+  const mergedQty = new Map<string, number>();
+  for (const it of parsed.data.items) {
+    mergedQty.set(it.productId, (mergedQty.get(it.productId) ?? 0) + it.qty);
+  }
+  const lines = [...mergedQty.entries()].filter(([, qty]) => qty > 0);
+  if (lines.length === 0) return c.json({ error: "数量が1以上の行がありません" }, 400);
+
+  try {
+    const movements = await prisma.$transaction(async (tx) => {
+      const productIds = lines.map(([id]) => id);
+      const products = await tx.product.findMany({
+        where: { shopId, id: { in: productIds } },
+      });
+      if (products.length !== productIds.length) {
+        const found = new Set(products.map((p) => p.id));
+        const missingId = productIds.find((id) => !found.has(id));
+        throw new Error(`MISSING_PRODUCT:${missingId ?? ""}`);
+      }
+
+      for (const [productId, qty] of lines) {
+        const bal = await stockQtyForProduct(tx, productId);
+        const p = products.find((x) => x.id === productId)!;
+        if (bal < qty) {
+          throw new Error(`STOCK_SHORT:${p.name}:${bal}:${qty}`);
+        }
+      }
+
+      const created = [];
+      for (const [productId, qty] of lines) {
+        const p = products.find((x) => x.id === productId)!;
+        const m = await tx.stockMovement.create({
+          data: {
+            shopId,
+            type: StockMovementType.OUT_MANUAL,
+            productId: p.id,
+            qty,
+            unitCostSnapshot: p.standardCost,
+            occurredAt,
+            reason: "お客様カルテから記録",
+            customerName,
+            createdByUserId: userId,
+          },
+        });
+        created.push(m);
+      }
+      return created;
+    });
+
+    return c.json({ movements, count: movements.length });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.startsWith("MISSING_PRODUCT:")) {
+      return c.json({ error: "存在しない商品が含まれています" }, 400);
+    }
+    if (msg.startsWith("STOCK_SHORT:")) {
+      const parts = msg.split(":");
+      const name = parts[1] ?? "商品";
+      const bal = parts[2] ?? "?";
+      const need = parts[3] ?? "?";
+      return c.json({ error: `在庫が足りません（${name}: 残り${bal}個、出そうとした数量${need}個）` }, 400);
+    }
+    console.error("[customers/handout]", e);
+    return c.json({ error: "記録に失敗しました。しばらくしてから再度お試しください。" }, 500);
+  }
 });
 
 const saleLineIn = z.discriminatedUnion("lineType", [

@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
 
 function isoLocal(d: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function newExtraRowId() {
+  return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
 }
 
 type SummaryProduct = {
@@ -41,6 +45,8 @@ type SummaryResponse = {
   handoutHistory: HandoutRow[];
 };
 
+type ExtraLine = { id: string; productId: string; qty: string };
+
 export function CustomerPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const nameFromUrl = searchParams.get("name") ?? "";
@@ -52,9 +58,15 @@ export function CustomerPage() {
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const [handProductId, setHandProductId] = useState("");
-  const [handQty, setHandQty] = useState(1);
+  /** カルテ内商品ごとの「今回渡す」数量（空＝送らない） */
+  const [handThisByProduct, setHandThisByProduct] = useState<Record<string, string>>({});
+  const [extraLines, setExtraLines] = useState<ExtraLine[]>([]);
   const [handWhen, setHandWhen] = useState(isoLocal(new Date()));
+
+  const summaryInitKey = useMemo(() => {
+    if (!summary) return "";
+    return `${summary.customerName}:${summary.products.map((p) => p.productId).join(",")}`;
+  }, [summary]);
 
   const loadNames = useCallback(async () => {
     const res = await api<{ names: string[] }>("/api/customers/names");
@@ -74,7 +86,6 @@ export function CustomerPage() {
         const res = await api<{ products: { id: string; name: string; active?: boolean }[] }>("/api/products");
         const list = res.products.filter((p) => (p as { active?: boolean }).active !== false);
         setActiveProducts(list);
-        setHandProductId((prev) => prev || list[0]?.id || "");
       } catch {
         /* マスタ未取得でもカルテは使える */
       }
@@ -95,6 +106,16 @@ export function CustomerPage() {
       });
   }, [nameFromUrl, loadSummary]);
 
+  useEffect(() => {
+    if (!summary) {
+      setHandThisByProduct({});
+      setExtraLines([]);
+      return;
+    }
+    setHandThisByProduct(Object.fromEntries(summary.products.map((p) => [p.productId, ""])));
+    setExtraLines([]);
+  }, [summaryInitKey]);
+
   function openCart() {
     const n = nameInput.trim();
     if (!n) {
@@ -105,25 +126,46 @@ export function CustomerPage() {
     setSearchParams({ name: n });
   }
 
+  function parseQty(s: string): number {
+    const n = Number.parseInt(String(s).trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
   async function submitHandout(e: React.FormEvent) {
     e.preventDefault();
     const customerName = nameFromUrl.trim();
     if (!customerName || !summary) return;
     setMsg(null);
     setErr(null);
+
+    const items: { productId: string; qty: number }[] = [];
+    for (const p of summary.products) {
+      const q = parseQty(handThisByProduct[p.productId] ?? "");
+      if (q > 0) items.push({ productId: p.productId, qty: q });
+    }
+    for (const row of extraLines) {
+      const q = parseQty(row.qty);
+      if (q > 0 && row.productId) items.push({ productId: row.productId, qty: q });
+    }
+
+    if (items.length === 0) {
+      setErr("1つ以上、今回渡す数量を入力してください");
+      return;
+    }
+
     try {
-      await api("/api/customers/handout", {
+      const res = await api<{ count: number }>("/api/customers/handout", {
         method: "POST",
         body: JSON.stringify({
           customerName,
-          productId: handProductId,
-          qty: handQty,
+          items,
           occurredAt: new Date(handWhen).toISOString(),
         }),
       });
-      setMsg("お渡しを記録し、在庫を減らしました");
+      setMsg(`お渡しを${res.count}件記録し、在庫を減らしました`);
       await loadSummary(customerName);
       await loadNames();
+      setHandWhen(isoLocal(new Date()));
     } catch (er) {
       setErr(er instanceof Error ? er.message : "記録に失敗しました");
     }
@@ -134,11 +176,20 @@ export function CustomerPage() {
     return Math.min(100, Math.round((handed / planned) * 100));
   }
 
+  function addExtraLine() {
+    const first = activeProducts[0]?.id ?? "";
+    setExtraLines((ls) => [...ls, { id: newExtraRowId(), productId: first, qty: "" }]);
+  }
+
+  function defaultProductIdForExtra() {
+    return activeProducts[0]?.id ?? "";
+  }
+
   return (
     <div>
       <h1 style={{ fontSize: "1.35rem" }}>お客様カルテ</h1>
       <p style={{ fontSize: "0.95rem", color: "#444", marginTop: "-0.25rem" }}>
-        コースで売上に載せた<strong>予定数量</strong>と、実際に渡した<strong>お渡し記録</strong>をまとめて見られます。カルテから記録すると<strong>在庫も自動で減ります</strong>。
+        コースで売上に載せた<strong>予定数量</strong>と、実際に渡した<strong>お渡し記録</strong>をまとめて見られます。複数商品を一度に選んで<strong>在庫をまとめて減らせます</strong>。
       </p>
       {err && <div className="alert error">{err}</div>}
       {msg && <div className="alert">{msg}</div>}
@@ -172,82 +223,151 @@ export function CustomerPage() {
         <>
           <h2 style={{ fontSize: "1.15rem", marginTop: "1.25rem" }}>{summary.customerName} さん</h2>
 
-          <div className="card stack" style={{ marginTop: "0.75rem" }}>
-            <strong>商品別のお渡し状況</strong>
+          <form className="card stack" style={{ marginTop: "0.75rem" }} onSubmit={submitHandout}>
+            <strong>お渡しを記録する（まとめて在庫を減らす）</strong>
             <p style={{ fontSize: "0.88rem", color: "#555", margin: 0 }}>
-              予定＝売上の物販明細の合計（取消済みは除く）。渡した＝カルテ記録＋その場で在庫を引いた販売。
+              表の「今回渡す」に数量を入れた行だけが記録されます。複数商品を同じ日時で一括登録できます（在庫不足があると<strong>どれも記録されません</strong>）。
             </p>
-            <div className="stack" style={{ gap: "1rem" }}>
-              {summary.products.length === 0 ? (
-                <p style={{ fontSize: "0.9rem", color: "#666" }}>このお客様の物販明細はまだありません。</p>
-              ) : (
-                summary.products.map((p) => {
-                  const bar = pct(p.handedQty, p.plannedQty);
-                  const over = p.remainingQty < 0;
-                  return (
-                    <div key={p.productId} style={{ borderBottom: "1px solid #eee", paddingBottom: "0.75rem" }}>
-                      <div style={{ fontWeight: 600 }}>{p.name}</div>
-                      <div style={{ fontSize: "0.9rem", color: "#333", marginTop: "0.25rem" }}>
-                        予定: {p.plannedQty} 個 ／ 渡した: {p.handedQty} 個 ／ 残り:{" "}
-                        <span style={over ? { color: "#c62828", fontWeight: 600 } : undefined}>
-                          {p.remainingQty} 個
-                        </span>
-                        {over && <span style={{ color: "#c62828", marginLeft: "0.35rem" }}>（予定を超えています）</span>}
-                      </div>
-                      <div
-                        style={{
-                          marginTop: "0.35rem",
-                          height: "8px",
-                          background: "#eee",
-                          borderRadius: "4px",
-                          overflow: "hidden",
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: `${bar}%`,
-                            height: "100%",
-                            background: over ? "#c62828" : "#2e7d32",
-                            transition: "width 0.2s ease",
-                          }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
 
-          <div className="card stack" style={{ marginTop: "0.75rem" }}>
-            <strong>今日のお渡しを記録する</strong>
-            <p style={{ fontSize: "0.88rem", color: "#555", margin: 0 }}>
-              商品と数量を選んで「記録する」を押すと、在庫から自動で引かれます。
-            </p>
-            <form className="stack" onSubmit={submitHandout}>
-              <div>
-                <label>商品</label>
-                <select value={handProductId} onChange={(e) => setHandProductId(e.target.value)}>
-                  {activeProducts.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+            {summary.products.length > 0 ? (
+              <div style={{ overflowX: "auto" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>商品</th>
+                      <th>予定</th>
+                      <th>渡した</th>
+                      <th>残り</th>
+                      <th>今回渡す</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.products.map((p) => {
+                      const bar = pct(p.handedQty, p.plannedQty);
+                      const over = p.remainingQty < 0;
+                      return (
+                        <tr key={p.productId}>
+                          <td>
+                            <div style={{ fontWeight: 600 }}>{p.name}</div>
+                            <div
+                              style={{
+                                marginTop: "0.25rem",
+                                height: "6px",
+                                maxWidth: "140px",
+                                background: "#eee",
+                                borderRadius: "3px",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${bar}%`,
+                                  height: "100%",
+                                  background: over ? "#c62828" : "#2e7d32",
+                                }}
+                              />
+                            </div>
+                          </td>
+                          <td>{p.plannedQty}</td>
+                          <td>{p.handedQty}</td>
+                          <td style={over ? { color: "#c62828", fontWeight: 600 } : undefined}>
+                            {p.remainingQty}
+                            {over && <span style={{ fontSize: "0.75rem", display: "block" }}>超過</span>}
+                          </td>
+                          <td>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              placeholder="0"
+                              value={handThisByProduct[p.productId] ?? ""}
+                              onChange={(e) =>
+                                setHandThisByProduct((prev) => ({
+                                  ...prev,
+                                  [p.productId]: e.target.value,
+                                }))
+                              }
+                              style={{ width: "4.5rem" }}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <div>
-                <label>数量</label>
-                <input type="number" inputMode="numeric" min={1} value={handQty} onChange={(e) => setHandQty(Number(e.target.value))} />
+            ) : (
+              <p style={{ fontSize: "0.9rem", color: "#666" }}>このお客様の物販明細はまだありません。下の「表にない商品」からお渡しを記録できます。</p>
+            )}
+
+            {extraLines.length > 0 && (
+              <div className="stack" style={{ marginTop: "0.5rem" }}>
+                <strong style={{ fontSize: "0.95rem" }}>表にない商品</strong>
+                {extraLines.map((row) => (
+                  <div key={row.id} className="row" style={{ gap: "0.5rem", alignItems: "flex-end", flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 140px" }}>
+                      <label style={{ fontSize: "0.8rem" }}>商品</label>
+                      <select
+                        value={row.productId}
+                        onChange={(e) =>
+                          setExtraLines((ls) =>
+                            ls.map((x) => (x.id === row.id ? { ...x, productId: e.target.value } : x))
+                          )
+                        }
+                      >
+                        {activeProducts.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ width: "5rem" }}>
+                      <label style={{ fontSize: "0.8rem" }}>個数</label>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        placeholder="0"
+                        value={row.qty}
+                        onChange={(e) =>
+                          setExtraLines((ls) => ls.map((x) => (x.id === row.id ? { ...x, qty: e.target.value } : x)))
+                        }
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setExtraLines((ls) => ls.filter((x) => x.id !== row.id))}
+                      style={{ marginBottom: "0.15rem" }}
+                    >
+                      削除
+                    </button>
+                  </div>
+                ))}
               </div>
-              <div>
-                <label>日時</label>
-                <input type="datetime-local" value={handWhen} onChange={(e) => setHandWhen(e.target.value)} />
-              </div>
-              <button type="submit" className="primary">
-                記録する（在庫を減らす）
-              </button>
-            </form>
-          </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() =>
+                setExtraLines((ls) => [
+                  ...ls,
+                  { id: newExtraRowId(), productId: defaultProductIdForExtra(), qty: "" },
+                ])
+              }
+              disabled={activeProducts.length === 0}
+            >
+              表にない商品を追加
+            </button>
+
+            <div>
+              <label>日時（一括）</label>
+              <input type="datetime-local" value={handWhen} onChange={(e) => setHandWhen(e.target.value)} />
+            </div>
+            <button type="submit" className="primary">
+              まとめて記録する（在庫を減らす）
+            </button>
+          </form>
 
           <h3 style={{ fontSize: "1.05rem", marginTop: "1.25rem" }}>コース・売上の記録</h3>
           <div style={{ overflowX: "auto" }}>
